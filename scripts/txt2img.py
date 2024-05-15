@@ -416,6 +416,7 @@ def main():
                 logger.info(f"Sampling data from {opt.cali_st} timesteps for calibration")
                 sample_data = torch.load(opt.cali_data_path)
                 cali_data = get_train_samples(opt, sample_data, opt.ddim_steps, sdxl=opt.sdxl)
+                cali_data = [x.to(unet.dtype) for x in cali_data]
                 del(sample_data)
                 gc.collect()
                 logger.info(f"Calibration data shape: {cali_data[0].shape} {cali_data[1].shape} {cali_data[2].shape}")
@@ -429,15 +430,16 @@ def main():
                 else:
                     logger.info("Initializing weight quantization parameters")
                     qnn.set_quant_state(True, False) # enable weight quantization, disable act quantization
-                    init_batch_size = 1
+                    init_batch_size = 5
                     if opt.sdxl:
                         added_cond_kwargs = {"text_embeds": cali_cs_pooled[:init_batch_size].cuda(), "time_ids": cali_add_time_ids[:init_batch_size].cuda()}
                     else:
                         added_cond_kwargs = {}
-                    logger.info(qnn)
-                    _ = qnn(cali_xs[:init_batch_size].cuda(), cali_ts[:init_batch_size].cuda(), cali_cs[:init_batch_size].cuda(), 
-                            added_cond_kwargs=added_cond_kwargs,
-                            )
+
+                    with torch.no_grad():
+                        _ = qnn(cali_xs[:init_batch_size].cuda(), cali_ts[:init_batch_size].cuda(), cali_cs[:init_batch_size].cuda(), 
+                                added_cond_kwargs=added_cond_kwargs, debug=True,
+                                )
                     logger.info("Initializing has done!") 
                 # Kwargs for weight rounding calibration
                 kwargs = dict(cali_data=cali_data, batch_size=opt.cali_batch_size, 
@@ -512,7 +514,7 @@ def main():
                             qnn.set_running_stat(False, opt.rs_sm_only)
 
                     kwargs = dict(
-                        cali_data=cali_data, batch_size=opt.cali_batch_size, iters=opt.cali_iters_a, act_quant=True, 
+                        cali_data=[x[:16] for x in cali_data], batch_size=opt.cali_batch_size, iters=opt.cali_iters_a, act_quant=True, 
                         opt_mode='mse', lr=opt.cali_lr, p=opt.cali_p, cond=opt.cond)
                     recon_model(qnn)
                     qnn.set_quant_state(weight_quant=True, act_quant=True)
