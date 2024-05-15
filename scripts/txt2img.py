@@ -12,6 +12,7 @@ from torchvision.utils import make_grid
 import time
 from pytorch_lightning import seed_everything
 import torch
+torch.set_num_threads(32)
 import torch.nn as nn
 from torch import autocast
 from contextlib import nullcontext
