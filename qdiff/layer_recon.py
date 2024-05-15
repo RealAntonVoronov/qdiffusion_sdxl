@@ -1,6 +1,7 @@
 import torch
 # import linklink as link
 import logging
+from tqdm import trange
 from qdiff.quant_layer import QuantModule, StraightThrough, lp_loss
 from qdiff.quant_model import QuantModel
 from qdiff.block_recon import LinearTempDecay
@@ -14,7 +15,7 @@ def layer_reconstruction(model: QuantModel, layer: QuantModule, cali_data: torch
                          batch_size: int = 32, iters: int = 20000, weight: float = 0.001, opt_mode: str = 'mse',
                          asym: bool = False, include_act_func: bool = True, b_range: tuple = (20, 2),
                          warmup: float = 0.0, act_quant: bool = False, lr: float = 4e-5, p: float = 2.0,
-                         multi_gpu: bool = False, cond: bool = False, is_sm: bool = False):
+                         multi_gpu: bool = False, cond: bool = False, is_sm: bool = False, sdxl: bool = False):
     """
     Block reconstruction to optimize the output from each layer.
 
@@ -82,13 +83,13 @@ def layer_reconstruction(model: QuantModel, layer: QuantModule, cali_data: torch
     # cached_inps, cached_outs = save_inp_oup_data(
     #     model, layer, cali_data, asym, act_quant, batch_size, keep_gpu=False, cond=cond, is_sm=is_sm)
     cached_inps, cached_outs = save_inp_oup_data(
-        model, layer, cali_data, asym, act_quant, 8, keep_gpu=False, cond=cond, is_sm=is_sm)
+        model, layer, cali_data, asym, act_quant, 8, keep_gpu=False, cond=cond, is_sm=is_sm, sdxl=sdxl)
     if opt_mode != 'mse':
         cached_grads = save_grad_data(model, layer, cali_data, act_quant, batch_size=batch_size)
     else:
         cached_grads = None
     device = 'cuda'
-    for i in range(iters):
+    for i in trange(iters):
         idx = torch.randperm(cached_inps.size(0))[:batch_size]
         cur_inp = cached_inps[idx].to(device)
         cur_out = cached_outs[idx].to(device)
@@ -96,8 +97,8 @@ def layer_reconstruction(model: QuantModel, layer: QuantModule, cali_data: torch
 
         optimizer.zero_grad()
         out_quant = layer(cur_inp)
-
         err = loss_func(out_quant, cur_out, cur_grad)
+        logger.info(err)
         err.backward(retain_graph=True)
         if multi_gpu:
             raise NotImplementedError

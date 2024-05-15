@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 def save_inp_oup_data(model: QuantModel, layer: Union[QuantModule, BaseQuantBlock], cali_data: torch.Tensor,
                       asym: bool = False, act_quant: bool = False, batch_size: int = 32, keep_gpu: bool = True,
-                      cond: bool = False, is_sm: bool = False):
+                      cond: bool = False, is_sm: bool = False, sdxl=False, with_kwargs=False, **kwargs):
     """
     Save input data and output data of a particular layer/block over calibration dataset.
 
@@ -33,7 +33,7 @@ def save_inp_oup_data(model: QuantModel, layer: Union[QuantModule, BaseQuantBloc
     :return: input and output data
     """
     device = next(model.parameters()).device
-    get_inp_out = GetLayerInpOut(model, layer, device=device, asym=asym, act_quant=act_quant)
+    get_inp_out = GetLayerInpOut(model, layer, device=device, asym=asym, act_quant=act_quant, sdxl=sdxl, with_kwargs=with_kwargs)
     cached_batches = []
     cached_inps, cached_outs = None, None
     torch.cuda.empty_cache()
@@ -41,7 +41,10 @@ def save_inp_oup_data(model: QuantModel, layer: Union[QuantModule, BaseQuantBloc
     if not cond:
         cali_xs, cali_ts = cali_data
     else:
-        cali_xs, cali_ts, cali_conds = cali_data
+        if sdxl:
+            cali_xs, cali_ts, cali_conds, cali_conds_pooled, cali_time_ids = cali_data
+        else:
+            cali_xs, cali_ts, cali_conds = cali_data
 
     if is_sm:
         logger.info("Checking if attention is too large...")
@@ -51,10 +54,16 @@ def save_inp_oup_data(model: QuantModel, layer: Union[QuantModule, BaseQuantBloc
                 cali_ts[:1].to(device)
             )
         else:
+            if sdxl:
+                added_cond_kwargs = {"text_embeds": cali_conds_pooled[:1].to(device), "time_ids": cali_time_ids[:1].to(device)}
+            else:
+                added_cond_kwargs = {}
             test_inp, test_out = get_inp_out(
                 cali_xs[:1].to(device), 
                 cali_ts[:1].to(device),
-                cali_conds[:1].to(device)
+                cali_conds[:1].to(device),
+                added_cond_kwargs=added_cond_kwargs,
+                **kwargs,
             )
             
         is_sm = False
@@ -88,14 +97,22 @@ def save_inp_oup_data(model: QuantModel, layer: Union[QuantModule, BaseQuantBloc
                 cali_ts[inds[i * batch_size:(i + 1) * batch_size]].to(device)
             )
         else:
+            if sdxl:
+                added_cond_kwargs = {"text_embeds": cali_conds_pooled[i * batch_size:(i + 1) * batch_size].to(device), 
+                                     "time_ids": cali_time_ids[i * batch_size:(i + 1) * batch_size].to(device)}
+            else:
+                added_cond_kwargs = {}
+
             cur_inp, cur_out = get_inp_out(
                 cali_xs[i * batch_size:(i + 1) * batch_size].to(device), 
                 cali_ts[i * batch_size:(i + 1) * batch_size].to(device),
-                cali_conds[i * batch_size:(i + 1) * batch_size].to(device)
+                cali_conds[i * batch_size:(i + 1) * batch_size].to(device),
+                added_cond_kwargs=added_cond_kwargs,
             ) if not is_sm else get_inp_out(
                 cali_xs[inds[i * batch_size:(i + 1) * batch_size]].to(device), 
                 cali_ts[inds[i * batch_size:(i + 1) * batch_size]].to(device),
-                cali_conds[inds[i * batch_size:(i + 1) * batch_size]].to(device)
+                cali_conds[inds[i * batch_size:(i + 1) * batch_size]].to(device),
+                added_cond_kwargs=added_cond_kwargs,
             )
         if isinstance(cur_inp, tuple):
             cur_x, cur_t = cur_inp
@@ -209,26 +226,43 @@ class DataSaverHook:
             self.output_store = output_batch
         if self.stop_forward:
             raise StopForwardException
+        
+class DataSaverHookWithKwargs(DataSaverHook):
+    def __call__(self, module, input_batch, kwargs, output_batch):
+        if self.store_input:
+            self.input_store = (input_batch[0], kwargs['encoder_hidden_states'])
+        if self.store_output:
+            self.output_store = output_batch
+        if self.stop_forward:
+            raise StopForwardException
 
 
 class GetLayerInpOut:
     def __init__(self, model: QuantModel, layer: Union[QuantModule, BaseQuantBlock],
-                 device: torch.device, asym: bool = False, act_quant: bool = False):
+                 device: torch.device, asym: bool = False, act_quant: bool = False, sdxl: bool = False, with_kwargs=False):
         self.model = model
         self.layer = layer
         self.asym = asym
         self.device = device
         self.act_quant = act_quant
-        self.data_saver = DataSaverHook(store_input=True, store_output=True, stop_forward=True)
+        self.sdxl = sdxl
+        self.hook_with_kwargs = with_kwargs
+        if with_kwargs:
+            self.data_saver = DataSaverHookWithKwargs(store_input=True, store_output=True, stop_forward=True)
+        else:
+            self.data_saver = DataSaverHook(store_input=True, store_output=True, stop_forward=True)
 
-    def __call__(self, x, timesteps, context=None):
+    def __call__(self, x, timesteps, context=None, **kwargs):
         self.model.eval()
         self.model.set_quant_state(False, False)
 
-        handle = self.layer.register_forward_hook(self.data_saver)
+        handle = self.layer.register_forward_hook(self.data_saver, with_kwargs=self.hook_with_kwargs)
         with torch.no_grad():
             try:
-                _ = self.model(x, timesteps, context)
+                if self.sdxl:
+                    _ = self.model(x, timesteps, context, kwargs['added_cond_kwargs'])
+                else:
+                    _ = self.model(x, timesteps, context)
             except StopForwardException:
                 pass
 
@@ -237,7 +271,10 @@ class GetLayerInpOut:
                 self.data_saver.store_output = False
                 self.model.set_quant_state(weight_quant=True, act_quant=self.act_quant)
                 try:
-                    _ = self.model(x, timesteps, context)
+                    if self.sdxl:
+                        _ = self.model(x, timesteps, context, kwargs['added_cond_kwargs'])
+                    else:
+                        _ = self.model(x, timesteps, context)
                 except StopForwardException:
                     pass
                 self.data_saver.store_output = True
@@ -321,8 +358,31 @@ def quantize_model_till(model: QuantModule, layer: Union[QuantModule, BaseQuantB
         if module == layer:
             break
 
+def get_train_samples_sdxl(sample_data, n_samples=128, n_steps=25, custom_steps=50):
+    max_n_steps = len(sample_data["ts"])
+    assert max_n_steps >= custom_steps
+    timesteps = list(range(0, max_n_steps, max_n_steps // n_steps))
+    print(f'Selected {len(timesteps)} steps from {max_n_steps} sampling steps')
+    # latents, add_text_embeds and add_time_ids are already concatenated for classifier-free guidance
+    # therefore n_samples needs to be adjusted
+    n_samples *= 2
+    latent_inputs = [sample_data["xs"][i][:n_samples] for i in timesteps]
+    ts = [sample_data["ts"][i].repeat(n_samples) for i in timesteps]
+    prompt_embeds = [sample_data["prompt_embeds"][:n_samples] for _ in timesteps]
+    add_text_embeds = [sample_data["add_text_embeds"][:n_samples] for _ in timesteps]
+    add_time_ids = sample_data["add_time_ids"].unsqueeze(0).repeat(n_samples * len(timesteps), 1)
+    
+    latent_inputs = torch.cat(latent_inputs)
+    ts = torch.cat(ts)
+    conds = torch.cat(prompt_embeds)
+    add_text_embeds = torch.cat(add_text_embeds)
+    
+    return latent_inputs, ts, conds, add_text_embeds, add_time_ids
 
-def get_train_samples(args, sample_data, custom_steps=None):
+
+def get_train_samples(args, sample_data, custom_steps=None, sdxl=False):
+    if sdxl:
+        return get_train_samples_sdxl(sample_data, n_samples=args.cali_n, n_steps=args.cali_st, custom_steps=args.ddim_steps)
     num_samples, num_st = args.cali_n, args.cali_st
     custom_steps = args.custom_steps if custom_steps is None else custom_steps
     if num_st == 1:
@@ -403,7 +463,9 @@ def resume_cali_model(qnn, ckpt_path, cali_data, quant_act=False, act_quant_mode
     keys = [key for key in ckpt.keys() if "act" in key]
     for key in keys:
         del ckpt[key]
-    qnn.load_state_dict(ckpt, strict=(act_quant_mode=='qdiff'))
+    qnn.load_state_dict(ckpt, 
+                        strict=False, # (act_quant_mode=='qdiff')
+                        )
     qnn.set_quant_state(weight_quant=True, act_quant=False)
     
     for m in qnn.model.modules():

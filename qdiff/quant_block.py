@@ -12,8 +12,8 @@ from ldm.modules.attention import BasicTransformerBlock
 from ldm.modules.attention import exists, default
 
 from ddim.models.diffusion import ResnetBlock, AttnBlock, nonlinearity
-
-
+from diffusers.models.resnet import ResnetBlock2D
+from diffusers.models.attention import BasicTransformerBlock as DiffusersBasicTransformerBlock
 logger = logging.getLogger(__name__)
 
 
@@ -218,6 +218,10 @@ def cross_attn_forward(self, x, context=None, mask=None):
     else:
         out = einsum('b i j, b j d -> b i d', attn, v)
     out = rearrange(out, '(b h) n d -> b n (h d)', h=h)
+    if isinstance(self.to_out, nn.ModuleList):
+        # in original code to_out is Sequential, but diffusers SDXL to_out is ModuleList
+        # where 0 module is a Linear, and 1 is a Dropout that is always 0
+        return self.to_out[0](out)
     return self.to_out(out)
 
 
@@ -233,7 +237,11 @@ class QuantBasicTransformerBlock(BaseQuantBlock):
         self.norm1 = tran.norm1
         self.norm2 = tran.norm2
         self.norm3 = tran.norm3
-        self.checkpoint = tran.checkpoint
+        try:
+            self.checkpoint = tran.checkpoint
+        except AttributeError:
+            # diffusers workaround, anyway this argument is False in all experiments
+            self.checkpoint = False
         # self.checkpoint = False
 
         # logger.info(f"quant attn matmul")
@@ -256,14 +264,20 @@ class QuantBasicTransformerBlock(BaseQuantBlock):
         self.attn1.use_act_quant = False
         self.attn2.use_act_quant = False
 
-    def forward(self, x, context=None):
-        # print(f"x shape {x.shape} context shape {context.shape}")
-        return checkpoint(self._forward, (x, context), self.parameters(), self.checkpoint)
+    def forward(self, x, encoder_hidden_states, **kwargs):
+        # if context is None:
+        #     # sdxl mode
+        #     for i, inp_batch in enumerate(x):
+        #         print(i, inp_batch.size())
+        #     context = kwargs['encoder_hidden_states']
+        #     print('in forward of quant block', x.size(), context.size())
+        return checkpoint(self._forward, (x, encoder_hidden_states), self.parameters(), self.checkpoint)
 
-    def _forward(self, x, context=None):
-        if context is None:
-            assert(len(x) == 2)
-            x, context = x
+    def _forward(self, x, context):
+        # if context is None:
+        #     assert(len(x) == 2)
+        #     x, context = x
+        assert context is not None
 
         x = self.attn1(self.norm1(x)) + x
         x = self.attn2(self.norm2(x), context=context) + x
@@ -281,6 +295,25 @@ class QuantBasicTransformerBlock(BaseQuantBlock):
             if isinstance(m, QuantModule):
                 m.set_quant_state(weight_quant, act_quant)
 
+class QuantDiffusersBasicTransformerBlock(QuantBasicTransformerBlock):
+    def forward(self, x, context=None, **kwargs):
+        if context is None:
+            # sdxl mode
+            print(kwargs.keys())
+            context = kwargs['encoder_hidden_states']
+            print('in forward of quant block', x.size(), context.size())
+        return checkpoint(self._forward, (x, context), self.parameters(), self.checkpoint)
+
+    def _forward(self, x, context=None):
+        if context is None:
+            assert(len(x) == 2)
+            x, context = x
+
+        x = self.attn1(self.norm1(x)) + x
+        x = self.attn2(self.norm2(x), context=context) + x
+        x = self.ff(self.norm3(x)) + x
+        return x
+
 
 # the two classes below are for DDIM CIFAR
 class QuantResnetBlock(BaseQuantBlock):
@@ -293,7 +326,11 @@ class QuantResnetBlock(BaseQuantBlock):
 
         self.norm1 = res.norm1
         self.conv1 = res.conv1
-        self.temb_proj = res.temb_proj
+        try:
+            self.temb_proj = res.temb_proj
+        except AttributeError:
+            # diffusers resnet block
+            self.temb_proj = res.time_emb_proj
         self.norm2 = res.norm2
         self.dropout = res.dropout
         self.conv2 = res.conv2
@@ -301,8 +338,11 @@ class QuantResnetBlock(BaseQuantBlock):
             if self.use_conv_shortcut:
                 self.conv_shortcut = res.conv_shortcut
             else:
-                self.nin_shortcut = res.nin_shortcut
-
+                try:
+                    self.nin_shortcut = res.nin_shortcut
+                except AttributeError:
+                    # diffusers resnet block
+                    self.nin_shortcut = res.conv_shortcut
 
     def forward(self, x, temb=None, split=0):
         if temb is None:
@@ -390,7 +430,9 @@ def get_specials(quant_act=False):
     specials = {
         ResBlock: QuantResBlock,
         BasicTransformerBlock: QuantBasicTransformerBlock,
+        DiffusersBasicTransformerBlock: QuantBasicTransformerBlock,
         ResnetBlock: QuantResnetBlock,
+        ResnetBlock2D: QuantResnetBlock,
         AttnBlock: QuantAttnBlock,
     }
     if quant_act:

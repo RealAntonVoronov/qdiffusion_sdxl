@@ -65,8 +65,8 @@ class QuantModel(nn.Module):
             if isinstance(m, (QuantModule, BaseQuantBlock)):
                 m.set_quant_state(weight_quant, act_quant)
 
-    def forward(self, x, timesteps=None, context=None):
-        return self.model(x, timesteps, context)
+    def forward(self, x, timesteps=None, context=None, added_cond_kwargs=None, **kwargs):
+        return self.model(x, timesteps, context, added_cond_kwargs=added_cond_kwargs, **kwargs)
     
     def set_running_stat(self, running_stat: bool, sm_only=False):
         for m in self.model.modules():
