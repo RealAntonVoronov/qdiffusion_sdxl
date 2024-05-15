@@ -328,6 +328,10 @@ def main():
         "--verbose", action="store_true",
         help="print out info like quantized model arch"
     )
+    parser.add_argument(
+        "--scale_method", choices=["max", "mse"], default="mse",
+        help="quantization initialization method. 'max' is fast, 'mse' is used in original work."
+    )
     opt = parser.parse_args()
 
     if opt.laion400m:
@@ -370,8 +374,8 @@ def main():
         if opt.split:
             setattr(sampler.model.model.diffusion_model, "split", True)
         if opt.quant_mode == 'qdiff':
-            wq_params = {'n_bits': opt.weight_bit, 'channel_wise': True, 'scale_method': 'mse'}
-            aq_params = {'n_bits': opt.act_bit, 'channel_wise': False, 'scale_method': 'mse', 'leaf_param':  opt.quant_act}
+            wq_params = {'n_bits': opt.weight_bit, 'channel_wise': True, 'scale_method': opt.scale_method}
+            aq_params = {'n_bits': opt.act_bit, 'channel_wise': False, 'scale_method': opt.scale_method, 'leaf_param':  opt.quant_act}
             if opt.resume:
                 logger.info('Load with min-max quick initialization')
                 wq_params['scale_method'] = 'max'
