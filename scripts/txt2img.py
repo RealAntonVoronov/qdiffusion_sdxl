@@ -12,6 +12,7 @@ from torchvision.utils import make_grid
 import time
 from pytorch_lightning import seed_everything
 import torch
+torch.set_num_threads(32)
 import torch.nn as nn
 from torch import autocast
 from contextlib import nullcontext
@@ -19,6 +20,7 @@ from contextlib import nullcontext
 from ldm.util import instantiate_from_config
 from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.models.diffusion.plms import PLMSSampler
+from ldm.modules.diffusionmodules.sdxl_unet import QDiffusionUNet
 from qdiff import (
     QuantModel, QuantModule, BaseQuantBlock, 
     block_reconstruction, layer_reconstruction,
@@ -27,6 +29,7 @@ from qdiff.adaptive_rounding import AdaRoundQuantizer
 from qdiff.quant_layer import UniformAffineQuantizer
 from qdiff.utils import resume_cali_model, get_train_samples
 from diffusers.pipelines.stable_diffusion.safety_checker import StableDiffusionSafetyChecker
+from diffusers import StableDiffusionXLPipeline, DDIMScheduler
 from transformers import AutoFeatureExtractor
 
 logger = logging.getLogger(__name__)
@@ -328,6 +331,14 @@ def main():
         "--verbose", action="store_true",
         help="print out info like quantized model arch"
     )
+    parser.add_argument(
+        "--sdxl", action="store_true",
+        help="run q-diffusion on SDXL UNet",
+    )
+    parser.add_argument(
+        "--sdxl_fp16", action="store_true",
+        help="whether to load teacher SDXL UNet in fp16",
+    )
     opt = parser.parse_args()
 
     if opt.laion400m:
@@ -355,23 +366,32 @@ def main():
     logger = logging.getLogger(__name__)
 
     config = OmegaConf.load(f"{opt.config}")
-    model = load_model_from_config(config, f"{opt.ckpt}")
-
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-    model = model.to(device)
-
-    if opt.plms:
-        sampler = PLMSSampler(model)
+    
+    if not opt.sdxl:
+        model = load_model_from_config(config, f"{opt.ckpt}")
+        model = model.to(device)
+        if opt.plms:
+            sampler = PLMSSampler(model)
+        else:
+            sampler = DDIMSampler(model)
+        unet = sampler.model.model.diffusion_model
     else:
-        sampler = DDIMSampler(model)
+        torch_dtype = torch.float16 if opt.sdxl_fp16 else torch.float32
+        variant = "fp16" if opt.sdxl_fp16 else None
+        sdxl_path = "stabilityai/stable-diffusion-xl-base-1.0"
+        unet = QDiffusionUNet.from_pretrained(sdxl_path, use_safetensors=True,
+                                              torch_dtype=torch_dtype, variant=variant,
+                                              subfolder='unet',
+                                              ).to(device)
 
     assert(opt.cond)
     if opt.ptq:
         if opt.split:
-            setattr(sampler.model.model.diffusion_model, "split", True)
+            setattr(unet, "split", True)
         if opt.quant_mode == 'qdiff':
-            wq_params = {'n_bits': opt.weight_bit, 'channel_wise': True, 'scale_method': 'mse'}
-            aq_params = {'n_bits': opt.act_bit, 'channel_wise': False, 'scale_method': 'mse', 'leaf_param':  opt.quant_act}
+            wq_params = {'n_bits': opt.weight_bit, 'channel_wise': True, 'scale_method': 'max'}
+            aq_params = {'n_bits': opt.act_bit, 'channel_wise': False, 'scale_method': 'max', 'leaf_param':  opt.quant_act}
             if opt.resume:
                 logger.info('Load with min-max quick initialization')
                 wq_params['scale_method'] = 'max'
@@ -379,7 +399,7 @@ def main():
             if opt.resume_w:
                 wq_params['scale_method'] = 'max'
             qnn = QuantModel(
-                model=sampler.model.model.diffusion_model, weight_quant_params=wq_params, act_quant_params=aq_params,
+                model=unet, weight_quant_params=wq_params, act_quant_params=aq_params,
                 act_quant_mode="qdiff", sm_abit=opt.sm_abit)
             qnn.cuda()
             qnn.eval()
@@ -395,23 +415,34 @@ def main():
             else:
                 logger.info(f"Sampling data from {opt.cali_st} timesteps for calibration")
                 sample_data = torch.load(opt.cali_data_path)
-                cali_data = get_train_samples(opt, sample_data, opt.ddim_steps)
+                cali_data = get_train_samples(opt, sample_data, opt.ddim_steps, sdxl=opt.sdxl)
                 del(sample_data)
                 gc.collect()
                 logger.info(f"Calibration data shape: {cali_data[0].shape} {cali_data[1].shape} {cali_data[2].shape}")
 
-                cali_xs, cali_ts, cali_cs = cali_data
+                if opt.sdxl:
+                    cali_xs, cali_ts, cali_cs, cali_cs_pooled, cali_add_time_ids = cali_data
+                else:    
+                    cali_xs, cali_ts, cali_cs = cali_data
                 if opt.resume_w:
                     resume_cali_model(qnn, opt.cali_ckpt, cali_data, False, cond=opt.cond)
                 else:
                     logger.info("Initializing weight quantization parameters")
                     qnn.set_quant_state(True, False) # enable weight quantization, disable act quantization
-                    _ = qnn(cali_xs[:8].cuda(), cali_ts[:8].cuda(), cali_cs[:8].cuda())
+                    init_batch_size = 1
+                    if opt.sdxl:
+                        added_cond_kwargs = {"text_embeds": cali_cs_pooled[:init_batch_size].cuda(), "time_ids": cali_add_time_ids[:init_batch_size].cuda()}
+                    else:
+                        added_cond_kwargs = {}
+                    logger.info(qnn)
+                    _ = qnn(cali_xs[:init_batch_size].cuda(), cali_ts[:init_batch_size].cuda(), cali_cs[:init_batch_size].cuda(), 
+                            added_cond_kwargs=added_cond_kwargs,
+                            )
                     logger.info("Initializing has done!") 
                 # Kwargs for weight rounding calibration
                 kwargs = dict(cali_data=cali_data, batch_size=opt.cali_batch_size, 
                             iters=opt.cali_iters, weight=0.01, asym=True, b_range=(20, 2),
-                            warmup=0.2, act_quant=False, opt_mode='mse', cond=opt.cond)
+                            warmup=0.2, act_quant=False, opt_mode='mse', cond=opt.cond, sdxl=opt.sdxl)
                 
                 def recon_model(model):
                     """
@@ -450,22 +481,34 @@ def main():
                     qnn.set_quant_state(weight_quant=True, act_quant=False)
                 if opt.quant_act:
                     logger.info("UNet model")
-                    logger.info(model.model)                    
+                    logger.info(unet)
                     logger.info("Doing activation calibration")
                     # Initialize activation quantization parameters
                     qnn.set_quant_state(True, True)
                     with torch.no_grad():
-                        inds = np.random.choice(cali_xs.shape[0], 16, replace=False)
-                        _ = qnn(cali_xs[inds].cuda(), cali_ts[inds].cuda(), cali_cs[inds].cuda())
+                        # batch_size = 16
+                        batch_size = 8
+                        inds = np.random.choice(cali_xs.shape[0], batch_size, replace=False)
+                        if opt.sdxl:
+                            added_cond_kwargs = {"text_embeds": cali_cs_pooled[inds].cuda(), "time_ids": cali_add_time_ids[inds].cuda()}
+                        else:
+                            added_cond_kwargs = {}
+                        _ = qnn(cali_xs[inds].cuda(), cali_ts[inds].cuda(), cali_cs[inds].cuda(), added_cond_kwargs=added_cond_kwargs)
                         if opt.running_stat:
                             logger.info('Running stat for activation quantization')
                             inds = np.arange(cali_xs.shape[0])
                             np.random.shuffle(inds)
                             qnn.set_running_stat(True, opt.rs_sm_only)
-                            for i in trange(int(cali_xs.size(0) / 16)):
-                                _ = qnn(cali_xs[inds[i * 16:(i + 1) * 16]].cuda(), 
-                                    cali_ts[inds[i * 16:(i + 1) * 16]].cuda(),
-                                    cali_cs[inds[i * 16:(i + 1) * 16]].cuda())
+                            for i in trange(int(cali_xs.size(0) / batch_size)):
+                                if opt.sdxl:
+                                    added_cond_kwargs = {"text_embeds": cali_cs_pooled[inds[i * batch_size:(i + 1) * batch_size]].cuda(), 
+                                                         "time_ids": cali_add_time_ids[inds[i * batch_size:(i + 1) * batch_size]].cuda()}
+                                else:
+                                    added_cond_kwargs = {}
+                                _ = qnn(cali_xs[inds[i * batch_size:(i + 1) * batch_size]].cuda(), 
+                                    cali_ts[inds[i * batch_size:(i + 1) * batch_size]].cuda(),
+                                    cali_cs[inds[i * batch_size:(i + 1) * batch_size]].cuda(),
+                                    added_cond_kwargs)
                             qnn.set_running_stat(False, opt.rs_sm_only)
 
                     kwargs = dict(
@@ -487,7 +530,16 @@ def main():
                                 m.zero_point = nn.Parameter(m.zero_point)
                 torch.save(qnn.state_dict(), os.path.join(outpath, "ckpt.pth"))
 
-            sampler.model.model.diffusion_model = qnn
+            if not opt.sdxl:
+                sampler.model.model.diffusion_model = qnn
+            else:
+                sdxl_path = "stabilityai/stable-diffusion-xl-base-1.0"
+                sdxl_pipeline = StableDiffusionXLPipeline.from_pretrained(sdxl_path,
+                                                                          torch_dtype=torch_dtype, variant=variant, 
+                                                                          use_safetensors=True,
+                                                                          scheduler=DDIMScheduler.from_config(sdxl_path, subfolder="scheduler"),
+                                                                          ).to(device)
+                sdxl_pipeline.unet = qnn
 
     logging.info("Creating invisible watermark encoder (see https://github.com/ShieldMnt/invisible-watermark)...")
     wm = "StableDiffusionV1"
@@ -519,7 +571,7 @@ def main():
         yaml.dump(sampling_conf, f, default_flow_style=False)
     if opt.verbose:
         logger.info("UNet model")
-        logger.info(model.model)
+        logger.info(unet)
 
     start_code = None
     if opt.fixed_code:
@@ -528,11 +580,12 @@ def main():
     precision_scope = autocast if opt.precision=="autocast" else nullcontext
     with torch.no_grad():
         with precision_scope("cuda"):
-            with model.ema_scope():
-                tic = time.time()
-                all_samples = list()
-                for n in trange(opt.n_iter, desc="Sampling"):
-                    for prompts in tqdm(data, desc="data"):
+            # with model.ema_scope():
+            tic = time.time()
+            all_samples = list()
+            for n in trange(opt.n_iter, desc="Sampling"):
+                for prompts in tqdm(data, desc="data"):
+                    if not opt.sdxl:
                         uc = None
                         if opt.scale != 1.0:
                             uc = model.get_learned_conditioning(batch_size * [""])
@@ -541,14 +594,14 @@ def main():
                         c = model.get_learned_conditioning(prompts)
                         shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
                         samples_ddim, _ = sampler.sample(S=opt.ddim_steps,
-                                                         conditioning=c,
-                                                         batch_size=opt.n_samples,
-                                                         shape=shape,
-                                                         verbose=False,
-                                                         unconditional_guidance_scale=opt.scale,
-                                                         unconditional_conditioning=uc,
-                                                         eta=opt.ddim_eta,
-                                                         x_T=start_code)
+                                                        conditioning=c,
+                                                        batch_size=opt.n_samples,
+                                                        shape=shape,
+                                                        verbose=False,
+                                                        unconditional_guidance_scale=opt.scale,
+                                                        unconditional_conditioning=uc,
+                                                        eta=opt.ddim_eta,
+                                                        x_T=start_code)
 
                         x_samples_ddim = model.decode_first_stage(samples_ddim)
                         x_samples_ddim = torch.clamp((x_samples_ddim + 1.0) / 2.0, min=0.0, max=1.0)
@@ -558,36 +611,41 @@ def main():
                         # x_checked_image, has_nsfw_concept = check_safety(x_samples_ddim)
 
                         x_checked_image_torch = torch.from_numpy(x_checked_image).permute(0, 3, 1, 2)
+                    else:
+                        x_checked_image_torch = generate_sdxl(sdxl_pipeline, prompts)
 
-                        if not opt.skip_save:
-                            for x_sample in x_checked_image_torch:
-                                x_sample = 255. * rearrange(x_sample.cpu().numpy(), 'c h w -> h w c')
-                                img = Image.fromarray(x_sample.astype(np.uint8))
-                                img = put_watermark(img, wm_encoder)
-                                img.save(os.path.join(sample_path, f"{base_count:05}.png"))
-                                base_count += 1
+                    if not opt.skip_save:
+                        for x_sample in x_checked_image_torch:
+                            x_sample = 255. * rearrange(x_sample.cpu().numpy(), 'c h w -> h w c')
+                            img = Image.fromarray(x_sample.astype(np.uint8))
+                            # img = put_watermark(img, wm_encoder)
+                            img.save(os.path.join(sample_path, f"{base_count:05}.png"))
+                            base_count += 1
 
-                        if not opt.skip_grid:
-                            all_samples.append(x_checked_image_torch)
+                    if not opt.skip_grid:
+                        all_samples.append(x_checked_image_torch)
 
-                if not opt.skip_grid:
-                    # additionally, save as grid
-                    grid = torch.stack(all_samples, 0)
-                    grid = rearrange(grid, 'n b c h w -> (n b) c h w')
-                    grid = make_grid(grid, nrow=n_rows)
+            if not opt.skip_grid:
+                # additionally, save as grid
+                grid = torch.stack(all_samples, 0)
+                grid = rearrange(grid, 'n b c h w -> (n b) c h w')
+                grid = make_grid(grid, nrow=n_rows)
 
-                    # to image
-                    grid = 255. * rearrange(grid, 'c h w -> h w c').cpu().numpy()
-                    img = Image.fromarray(grid.astype(np.uint8))
-                    img = put_watermark(img, wm_encoder)
-                    img.save(os.path.join(outpath, f'grid-{grid_count:04}.png'))
-                    grid_count += 1
+                # to image
+                grid = 255. * rearrange(grid, 'c h w -> h w c').cpu().numpy()
+                img = Image.fromarray(grid.astype(np.uint8))
+                img = put_watermark(img, wm_encoder)
+                img.save(os.path.join(outpath, f'grid-{grid_count:04}.png'))
+                grid_count += 1
 
-                toc = time.time()
+            toc = time.time()
 
     logging.info(f"Your samples are ready and waiting for you here: \n{outpath} \n"
           f" \nEnjoy.")
 
-
+def generate_sdxl(pipe, prompts):
+    with torch.inference_mode():
+        return pipe(prompts, output_type='pt').images
+    
 if __name__ == "__main__":
     main()

@@ -14,7 +14,7 @@ def block_reconstruction(model: QuantModel, block: BaseQuantBlock, cali_data: to
                          batch_size: int = 32, iters: int = 20000, weight: float = 0.01, opt_mode: str = 'mse',
                          asym: bool = False, include_act_func: bool = True, b_range: tuple = (20, 2),
                          warmup: float = 0.0, act_quant: bool = False, lr: float = 4e-5, p: float = 2.0,
-                         multi_gpu: bool = False, cond: bool = False, is_sm: bool = False):
+                         multi_gpu: bool = False, cond: bool = False, is_sm: bool = False, sdxl: bool = False, with_kwargs=False, **kwargs):
     """
     Block reconstruction to optimize the output from each block.
 
@@ -118,9 +118,9 @@ def block_reconstruction(model: QuantModel, block: BaseQuantBlock, cali_data: to
     # cached_inps, cached_outs = save_inp_oup_data(
         # model, block, cali_data, asym, act_quant, batch_size, keep_gpu=False, cond=cond, is_sm=is_sm)
     cached_inps, cached_outs = save_inp_oup_data(
-        model, block, cali_data, asym, act_quant, 8, keep_gpu=False, cond=cond, is_sm=is_sm)
+        model, block, cali_data, asym, act_quant, 8, keep_gpu=False, cond=cond, is_sm=is_sm, sdxl=sdxl, with_kwargs=with_kwargs, **kwargs)
     if opt_mode != 'mse':
-        cached_grads = save_grad_data(model, block, cali_data, act_quant, batch_size=batch_size)
+        cached_grads = save_grad_data(model, block, cali_data, act_quant, batch_size=batch_size,)
     else:
         cached_grads = None
     device = 'cuda'
@@ -143,6 +143,7 @@ def block_reconstruction(model: QuantModel, block: BaseQuantBlock, cali_data: to
             out_quant = block(cur_inp)
 
         err = loss_func(out_quant, cur_out, cur_grad)
+        print(err)
         err.backward(retain_graph=True)
         if multi_gpu:
             raise NotImplementedError
