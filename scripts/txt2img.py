@@ -477,7 +477,7 @@ def main():
                                 continue
                             else:
                                 logger.info('Reconstruction for block {}'.format(name))
-                                block_reconstruction(qnn, module, **kwargs)
+                                block_reconstruction(qnn, module, with_kwargs=True, **kwargs)
                         else:
                             recon_model(module)
 
