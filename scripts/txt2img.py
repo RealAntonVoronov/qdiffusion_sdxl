@@ -339,6 +339,10 @@ def main():
         "--sdxl_fp16", action="store_true",
         help="whether to load teacher SDXL UNet in fp16",
     )
+    parser.add_argument(
+        "--scale_method", choices=["max", "mse"], default="mse",
+        help="quantization initialization method. 'max' is fast, 'mse' is used in original work.",
+    )
     opt = parser.parse_args()
 
     if opt.laion400m:
@@ -390,8 +394,13 @@ def main():
         if opt.split:
             setattr(unet, "split", True)
         if opt.quant_mode == 'qdiff':
+<<<<<<< HEAD
             wq_params = {'n_bits': opt.weight_bit, 'channel_wise': True, 'scale_method': 'max'}
             aq_params = {'n_bits': opt.act_bit, 'channel_wise': False, 'scale_method': 'max', 'leaf_param':  opt.quant_act}
+=======
+            wq_params = {'n_bits': opt.weight_bit, 'channel_wise': True, 'scale_method': opt.scale_method}
+            aq_params = {'n_bits': opt.act_bit, 'channel_wise': False, 'scale_method': opt.scale_method, 'leaf_param':  opt.quant_act}
+>>>>>>> quant_init_change
             if opt.resume:
                 logger.info('Load with min-max quick initialization')
                 wq_params['scale_method'] = 'max'
