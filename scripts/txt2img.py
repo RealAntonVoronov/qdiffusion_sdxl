@@ -292,7 +292,8 @@ def main():
         help="path for calibrated model ckpt"
     )
     parser.add_argument(
-        "--cali_data_path", type=str, default="sd_coco_sample1024_allst.pt",
+        "--cali_data_path", type=str, 
+        # default="sd_coco_sample1024_allst.pt",
         help="calibration dataset name"
     )
     parser.add_argument(
@@ -414,12 +415,17 @@ def main():
                 resume_cali_model(qnn, opt.cali_ckpt, cali_data, opt.quant_act, "qdiff", cond=opt.cond)
             else:
                 logger.info(f"Sampling data from {opt.cali_st} timesteps for calibration")
-                sample_data = torch.load(opt.cali_data_path)
-                cali_data = get_train_samples(opt, sample_data, opt.ddim_steps, sdxl=opt.sdxl)
-                cali_data = [x.to(unet.dtype) for x in cali_data]
-                del(sample_data)
-                gc.collect()
-                logger.info(f"Calibration data shape: {cali_data[0].shape} {cali_data[1].shape} {cali_data[2].shape}")
+                if opt.cali_data_path:
+                    sample_data = torch.load(opt.cali_data_path)
+                    cali_data = get_train_samples(opt, sample_data, opt.ddim_steps, sdxl=opt.sdxl)
+                    cali_data = [x[:16].to(unet.dtype) for x in cali_data]
+                    del(sample_data)
+                    gc.collect()
+                    logger.info(f"Calibration data shape: {cali_data[0].shape} {cali_data[1].shape} {cali_data[2].shape}")
+                else:
+                    cali_data = (torch.randn(6400, 4, 128, 128), torch.randint(0, 1000, (6400,)), torch.randn(6400, 77, 2048), torch.randn(6400, 1280), 
+                                 torch.tensor([[1024, 1024, 0, 0, 1024, 1024]]).repeat(6400, 1))
+                    cali_data = [x.to(unet.dtype) for x in cali_data]
 
                 if opt.sdxl:
                     cali_xs, cali_ts, cali_cs, cali_cs_pooled, cali_add_time_ids = cali_data
