@@ -455,7 +455,7 @@ def convert_adaround(model):
             convert_adaround(module)
 
 
-def resume_cali_model(qnn, ckpt_path, cali_data, quant_act=False, act_quant_mode='qdiff', cond=False):
+def resume_cali_model(qnn, ckpt_path, cali_data, quant_act=False, act_quant_mode='qdiff', cond=False, sdxl=False):
     print("Loading quantized model checkpoint")
     ckpt = torch.load(ckpt_path, map_location='cpu')
     
@@ -465,8 +465,13 @@ def resume_cali_model(qnn, ckpt_path, cali_data, quant_act=False, act_quant_mode
         cali_xs, cali_ts = cali_data
         _ = qnn(cali_xs[:1].cuda(), cali_ts[:1].cuda())
     else:
-        cali_xs, cali_ts, cali_cs = cali_data
-        _ = qnn(cali_xs[:1].cuda(), cali_ts[:1].cuda(), cali_cs[:1].cuda())
+        if sdxl:
+            cali_xs, cali_ts, cali_cs, cali_cs_pooled, cali_add_time_ids = cali_data
+            added_cond_kwargs = {"text_embeds": cali_cs_pooled[:1].cuda(), "time_ids": cali_add_time_ids[:1].cuda()}
+            _ = qnn(cali_xs[:1].cuda(), cali_ts[:1].cuda(), cali_cs[:1].cuda(), added_cond_kwargs=added_cond_kwargs)
+        else:
+            cali_xs, cali_ts, cali_cs = cali_data
+            _ = qnn(cali_xs[:1].cuda(), cali_ts[:1].cuda(), cali_cs[:1].cuda())
     # change weight quantizer from uniform to adaround
     convert_adaround(qnn)
     

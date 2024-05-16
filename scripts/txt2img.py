@@ -410,8 +410,12 @@ def main():
                 qnn.set_grad_ckpt(False)
 
             if opt.resume:
-                cali_data = (torch.randn(1, 4, 64, 64), torch.randint(0, 1000, (1,)), torch.randn(1, 77, 768))
-                resume_cali_model(qnn, opt.cali_ckpt, cali_data, opt.quant_act, "qdiff", cond=opt.cond)
+                if opt.sdxl:
+                    cali_data = (torch.randn(1, 4, 128, 128), torch.randint(0, 1000, (1,)), torch.randn(1, 77, 2048), torch.randn(1, 1280), torch.tensor([[1024, 1024, 0, 0, 1024, 1024]]))
+                    cali_data = [x.to(unet.dtype) for x in cali_data]
+                else:
+                    cali_data = (torch.randn(1, 4, 64, 64), torch.randint(0, 1000, (1,)), torch.randn(1, 77, 768))
+                resume_cali_model(qnn, opt.cali_ckpt, cali_data, opt.quant_act, "qdiff", cond=opt.cond, sdxl=opt.sdxl)
             else:
                 logger.info(f"Sampling data from {opt.cali_st} timesteps for calibration")
                 sample_data = torch.load(opt.cali_data_path)
@@ -541,6 +545,8 @@ def main():
                                                                           use_safetensors=True,
                                                                           scheduler=DDIMScheduler.from_config(sdxl_path, subfolder="scheduler"),
                                                                           ).to(device)
+                # one warmup run just to turn on some of the parameters for generation
+                _ = sdxl_pipeline("tree")
                 sdxl_pipeline.unet = qnn
 
     logging.info("Creating invisible watermark encoder (see https://github.com/ShieldMnt/invisible-watermark)...")
