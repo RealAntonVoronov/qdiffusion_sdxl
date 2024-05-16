@@ -468,11 +468,12 @@ def resume_cali_model(qnn, ckpt_path, cali_data, quant_act=False, act_quant_mode
         if sdxl:
             cali_xs, cali_ts, cali_cs, cali_cs_pooled, cali_add_time_ids = cali_data
             added_cond_kwargs = {"text_embeds": cali_cs_pooled[:1].cuda(), "time_ids": cali_add_time_ids[:1].cuda()}
-            _ = qnn(cali_xs[:1].cuda(), cali_ts[:1].cuda(), cali_cs[:1].cuda(), added_cond_kwargs=added_cond_kwargs)
+            _ = qnn(cali_xs[:1].cuda(), cali_ts[:1].cuda(), cali_cs[:1].cuda(), added_cond_kwargs=added_cond_kwargs, debug=True)
         else:
             cali_xs, cali_ts, cali_cs = cali_data
             _ = qnn(cali_xs[:1].cuda(), cali_ts[:1].cuda(), cali_cs[:1].cuda())
     # change weight quantizer from uniform to adaround
+    torch.cuda.empty_cache()
     convert_adaround(qnn)
     
     for m in qnn.model.modules():
