@@ -138,7 +138,7 @@ def block_reconstruction(model: QuantModel, block: BaseQuantBlock, cali_data: to
 
         optimizer.zero_grad()
         if isinstance(cur_inp, tuple):
-            out_quant = block(cur_inp[0], cur_inp[1])
+            out_quant = block(*cur_inp)
         else:
             out_quant = block(cur_inp)
 
