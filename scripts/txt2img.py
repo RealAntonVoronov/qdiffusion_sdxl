@@ -209,8 +209,13 @@ def main():
         "--save_after_init", action='store_true',
         help="save checkpoint after quantization paramters initailization. Might be valuable for mse init."
     )
+    parser.add_argument(
+        "--exp_name", default='sdxl_w4a32',
+    )
     opt = parser.parse_args()
-
+    if opt.exp_name is None:
+        exp_name = f"{opt.scale_method}_init_s{opt.cali_data_size}_iters{opt.cali_iters}"
+    wandb.init(entity='rock-and-roll', project='baselines', name=exp_name)
     seed_everything(opt.seed)
 
     os.makedirs(opt.outdir, exist_ok=True)
@@ -450,7 +455,6 @@ def main():
     images_2 = res_images['student']
 
     res_grid = make_image_grid(list(chain.from_iterable(zip(images_1, images_2))), rows=len(images_1), cols=2, resize=512)
-    wandb.init(entity='rock-and-roll', project='baselines', name=opt.exp_name)
     images = wandb.Image(res_grid, caption="Left: Teacher, Right: Student")
     wandb.log({"examples": images}, step=0)
     res_grid.save(f"{outpath}/grid.jpg")
