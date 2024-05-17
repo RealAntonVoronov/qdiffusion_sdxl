@@ -246,11 +246,11 @@ def main():
             sampler = DDIMSampler(model)
         unet = sampler.model.model.diffusion_model
     else:
-        torch_dtype = torch.float16 if opt.sdxl_fp16 else torch.float32
-        variant = "fp16" if opt.sdxl_fp16 else None
+        # torch_dtype = torch.float16 if opt.sdxl_fp16 else torch.float32
+        # variant = "fp16" if opt.sdxl_fp16 else None
         sdxl_path = "stabilityai/stable-diffusion-xl-base-1.0"
         unet = QDiffusionUNet.from_pretrained(sdxl_path, use_safetensors=True,
-                                              torch_dtype=torch_dtype, variant=variant,
+                                            #   torch_dtype=torch_dtype, variant=variant,
                                               subfolder='unet',
                                               ).to(device)
 
@@ -336,7 +336,7 @@ def main():
         # Kwargs for weight rounding calibration
         kwargs = dict(cali_data=cali_data, batch_size=opt.cali_batch_size, 
                     iters=opt.cali_iters, weight=0.01, asym=True, b_range=(20, 2),
-                    warmup=0.2, act_quant=False, opt_mode='mse', cond=opt.cond, sdxl=opt.sdxl)
+                    warmup=0.2, act_quant=False, opt_mode='mse', cond=True, sdxl=opt.sdxl)
         
         def recon_model(model):
             """
