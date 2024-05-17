@@ -214,8 +214,8 @@ def main():
     )
     opt = parser.parse_args()
     if opt.exp_name is None:
-        exp_name = f"{opt.scale_method}_init_s{opt.cali_data_size}_iters{opt.cali_iters}"
-    wandb.init(entity='rock-and-roll', project='baselines', name=exp_name)
+        opt.exp_name = f"{opt.scale_method}_init_s{opt.cali_data_size}_iters{opt.cali_iters}"
+    wandb.init(entity='rock-and-roll', project='baselines', name=opt.exp_name)
     seed_everything(opt.seed)
 
     os.makedirs(opt.outdir, exist_ok=True)
