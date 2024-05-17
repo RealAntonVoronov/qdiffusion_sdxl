@@ -333,6 +333,10 @@ def main():
         "--scale_method", choices=["max", "mse"], default="mse",
         help="quantization initialization method. 'max' is fast, 'mse' is used in original work."
     )
+    parser.add_argument(
+        "--init_batch_size", default=8, type=int,
+        help="Batch size for quantized weights initialization with scale_method == mse. Default 8 results in OOM."
+    )
     opt = parser.parse_args()
 
     if opt.laion400m:
@@ -409,9 +413,10 @@ def main():
                 if opt.resume_w:
                     resume_cali_model(qnn, opt.cali_ckpt, cali_data, False, cond=opt.cond)
                 else:
+                    init_batch_size = opt.init_batch_size
                     logger.info("Initializing weight quantization parameters")
                     qnn.set_quant_state(True, False) # enable weight quantization, disable act quantization
-                    _ = qnn(cali_xs[:8].cuda(), cali_ts[:8].cuda(), cali_cs[:8].cuda())
+                    _ = qnn(cali_xs[:init_batch_size].cuda(), cali_ts[:init_batch_size].cuda(), cali_cs[:init_batch_size].cuda())
                     logger.info("Initializing has done!") 
                 # Kwargs for weight rounding calibration
                 kwargs = dict(cali_data=cali_data, batch_size=opt.cali_batch_size, 
