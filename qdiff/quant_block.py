@@ -295,25 +295,6 @@ class QuantBasicTransformerBlock(BaseQuantBlock):
             if isinstance(m, QuantModule):
                 m.set_quant_state(weight_quant, act_quant)
 
-class QuantDiffusersBasicTransformerBlock(QuantBasicTransformerBlock):
-    def forward(self, x, context=None, **kwargs):
-        if context is None:
-            # sdxl mode
-            print(kwargs.keys())
-            context = kwargs['encoder_hidden_states']
-            print('in forward of quant block', x.size(), context.size())
-        return checkpoint(self._forward, (x, context), self.parameters(), self.checkpoint)
-
-    def _forward(self, x, context=None):
-        if context is None:
-            assert(len(x) == 2)
-            x, context = x
-
-        x = self.attn1(self.norm1(x)) + x
-        x = self.attn2(self.norm2(x), context=context) + x
-        x = self.ff(self.norm3(x)) + x
-        return x
-
 
 # the two classes below are for DDIM CIFAR
 class QuantResnetBlock(BaseQuantBlock):

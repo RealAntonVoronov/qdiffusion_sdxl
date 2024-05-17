@@ -98,7 +98,8 @@ def layer_reconstruction(model: QuantModel, layer: QuantModule, cali_data: torch
         optimizer.zero_grad()
         out_quant = layer(cur_inp)
         err = loss_func(out_quant, cur_out, cur_grad)
-        logger.info(err)
+        if i % 500 == 0:
+            logger.info(err)
         err.backward(retain_graph=True)
         if multi_gpu:
             raise NotImplementedError

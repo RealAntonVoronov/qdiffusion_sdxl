@@ -340,6 +340,18 @@ def main():
         "--sdxl_fp16", action="store_true",
         help="whether to load teacher SDXL UNet in fp16",
     )
+    parser.add_argument(
+        "--scale_method", choices=["max", "mse"], default="mse",
+        help="quantization initialization method. 'max' is fast, 'mse' is used in original work.",
+    )
+    parser.add_argument(
+        "--cali_data_size", type=int, default=6400,
+        help="use less data for calibration than SD v1.5 to be able to run it in a finite time",
+    )
+    parser.add_argument(
+        "--save_after_init", action='store_true',
+        help="save checkpoint after quantization paramters initailization. Might be valuable for mse init."
+    )
     opt = parser.parse_args()
 
     if opt.laion400m:
@@ -391,8 +403,8 @@ def main():
         if opt.split:
             setattr(unet, "split", True)
         if opt.quant_mode == 'qdiff':
-            wq_params = {'n_bits': opt.weight_bit, 'channel_wise': True, 'scale_method': 'max'}
-            aq_params = {'n_bits': opt.act_bit, 'channel_wise': False, 'scale_method': 'max', 'leaf_param':  opt.quant_act}
+            wq_params = {'n_bits': opt.weight_bit, 'channel_wise': True, 'scale_method': opt.scale_method}
+            aq_params = {'n_bits': opt.act_bit, 'channel_wise': False, 'scale_method': opt.scale_method, 'leaf_param':  opt.quant_act}
             if opt.resume:
                 logger.info('Load with min-max quick initialization')
                 wq_params['scale_method'] = 'max'
@@ -411,8 +423,12 @@ def main():
                 qnn.set_grad_ckpt(False)
 
             if opt.resume:
-                cali_data = (torch.randn(1, 4, 64, 64), torch.randint(0, 1000, (1,)), torch.randn(1, 77, 768))
-                resume_cali_model(qnn, opt.cali_ckpt, cali_data, opt.quant_act, "qdiff", cond=opt.cond)
+                if opt.sdxl:
+                    cali_data = (torch.randn(1, 4, 128, 128), torch.randint(0, 1000, (1,)), torch.randn(1, 77, 2048), torch.randn(1, 1280), torch.tensor([[1024, 1024, 0, 0, 1024, 1024]]))
+                    cali_data = [x.to(unet.dtype) for x in cali_data]
+                else:
+                    cali_data = (torch.randn(1, 4, 64, 64), torch.randint(0, 1000, (1,)), torch.randn(1, 77, 768))
+                resume_cali_model(qnn, opt.cali_ckpt, cali_data, opt.quant_act, "qdiff", cond=opt.cond, sdxl=opt.sdxl)
             else:
                 logger.info(f"Sampling data from {opt.cali_st} timesteps for calibration")
                 if opt.cali_data_path:
@@ -446,9 +462,22 @@ def main():
                         _ = qnn(cali_xs[:init_batch_size].cuda(), cali_ts[:init_batch_size].cuda(), cali_cs[:init_batch_size].cuda(), 
                                 added_cond_kwargs=added_cond_kwargs, debug=True,
                                 )
-                    logger.info("Initializing has done!") 
+                    logger.info("Initializing has done!")
+                    if opt.save_after_init:
+                        logger.info("Saving calibrated quantized UNet model")
+                        for m in qnn.model.modules():
+                            if isinstance(m, AdaRoundQuantizer):
+                                m.zero_point = nn.Parameter(m.zero_point)
+                                m.delta = nn.Parameter(m.delta)
+                            elif isinstance(m, UniformAffineQuantizer) and opt.quant_act:
+                                if m.zero_point is not None:
+                                    if not torch.is_tensor(m.zero_point):
+                                        m.zero_point = nn.Parameter(torch.tensor(float(m.zero_point)))
+                                    else:
+                                        m.zero_point = nn.Parameter(m.zero_point)
+                        torch.save(qnn.state_dict(), os.path.join(outpath, "ckpt_inited.pth"))
                 # Kwargs for weight rounding calibration
-                kwargs = dict(cali_data=cali_data, batch_size=opt.cali_batch_size, 
+                kwargs = dict(cali_data=[x[:opt.cali_data_size] for x in cali_data], batch_size=opt.cali_batch_size, 
                             iters=opt.cali_iters, weight=0.01, asym=True, b_range=(20, 2),
                             warmup=0.2, act_quant=False, opt_mode='mse', cond=opt.cond, sdxl=opt.sdxl)
                 
@@ -479,7 +508,7 @@ def main():
                                 continue
                             else:
                                 logger.info('Reconstruction for block {}'.format(name))
-                                block_reconstruction(qnn, module, **kwargs)
+                                block_reconstruction(qnn, module, with_kwargs=True, **kwargs)
                         else:
                             recon_model(module)
 
@@ -520,7 +549,8 @@ def main():
                             qnn.set_running_stat(False, opt.rs_sm_only)
 
                     kwargs = dict(
-                        cali_data=[x[:16] for x in cali_data], batch_size=opt.cali_batch_size, iters=opt.cali_iters_a, act_quant=True, 
+                        cali_data=[x[:opt.cali_data_size] for x in cali_data], 
+                        batch_size=opt.cali_batch_size, iters=opt.cali_iters_a, act_quant=True, 
                         opt_mode='mse', lr=opt.cali_lr, p=opt.cali_p, cond=opt.cond)
                     recon_model(qnn)
                     qnn.set_quant_state(weight_quant=True, act_quant=True)
@@ -547,6 +577,8 @@ def main():
                                                                           use_safetensors=True,
                                                                           scheduler=DDIMScheduler.from_config(sdxl_path, subfolder="scheduler"),
                                                                           ).to(device)
+                # one warmup run just to turn on some of the parameters for generation
+                _ = sdxl_pipeline("tree")
                 sdxl_pipeline.unet = qnn
 
     logging.info("Creating invisible watermark encoder (see https://github.com/ShieldMnt/invisible-watermark)...")

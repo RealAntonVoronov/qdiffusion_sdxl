@@ -228,9 +228,25 @@ class DataSaverHook:
             raise StopForwardException
         
 class DataSaverHookWithKwargs(DataSaverHook):
+    def __init__(self, store_input=False, store_output=False, stop_forward=False):
+        super().__init__(store_input=store_input, store_output=store_output, stop_forward=stop_forward)
+        self.first_time = True
     def __call__(self, module, input_batch, kwargs, output_batch):
+        if self.first_time:
+            print(kwargs.keys())
+            self.first_time = False
+
         if self.store_input:
-            self.input_store = (input_batch[0], kwargs['encoder_hidden_states'])
+            if 'encoder_hidden_states' in kwargs:
+                self.input_store = input_batch + (kwargs['encoder_hidden_states'], )
+            elif 'temb' in kwargs:
+                self.input_store = input_batch + (kwargs['temb'],)
+            elif 'emb' in kwargs:
+                self.input_store = input_batch + (kwargs['emb'],)
+            elif 'res_hidden_states_tuple' in kwargs:
+                self.input_store = input_batch + (kwargs['temb'],) + kwargs['res_hidden_states_tuple'] + (kwargs['encoder_hidden_states'],)
+            else:
+                self.input_store = input_batch
         if self.store_output:
             self.output_store = output_batch
         if self.stop_forward:
@@ -439,7 +455,7 @@ def convert_adaround(model):
             convert_adaround(module)
 
 
-def resume_cali_model(qnn, ckpt_path, cali_data, quant_act=False, act_quant_mode='qdiff', cond=False):
+def resume_cali_model(qnn, ckpt_path, cali_data, quant_act=False, act_quant_mode='qdiff', cond=False, sdxl=False):
     print("Loading quantized model checkpoint")
     ckpt = torch.load(ckpt_path, map_location='cpu')
     
@@ -449,9 +465,15 @@ def resume_cali_model(qnn, ckpt_path, cali_data, quant_act=False, act_quant_mode
         cali_xs, cali_ts = cali_data
         _ = qnn(cali_xs[:1].cuda(), cali_ts[:1].cuda())
     else:
-        cali_xs, cali_ts, cali_cs = cali_data
-        _ = qnn(cali_xs[:1].cuda(), cali_ts[:1].cuda(), cali_cs[:1].cuda())
+        if sdxl:
+            cali_xs, cali_ts, cali_cs, cali_cs_pooled, cali_add_time_ids = cali_data
+            added_cond_kwargs = {"text_embeds": cali_cs_pooled[:1].cuda(), "time_ids": cali_add_time_ids[:1].cuda()}
+            _ = qnn(cali_xs[:1].cuda(), cali_ts[:1].cuda(), cali_cs[:1].cuda(), added_cond_kwargs=added_cond_kwargs, debug=True)
+        else:
+            cali_xs, cali_ts, cali_cs = cali_data
+            _ = qnn(cali_xs[:1].cuda(), cali_ts[:1].cuda(), cali_cs[:1].cuda())
     # change weight quantizer from uniform to adaround
+    torch.cuda.empty_cache()
     convert_adaround(qnn)
     
     for m in qnn.model.modules():
