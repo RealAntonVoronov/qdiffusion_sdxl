@@ -343,6 +343,14 @@ def main():
         "--scale_method", choices=["max", "mse"], default="mse",
         help="quantization initialization method. 'max' is fast, 'mse' is used in original work.",
     )
+    parser.add_argument(
+        "--cali_data_size", type=int, default=6400,
+        help="use less data for calibration than SD v1.5 to be able to run it in a finite time",
+    )
+    parser.add_argument(
+        "--save_after_init", action='store_true',
+        help="save checkpoint after quantization paramters initailization. Might be valuable for mse init."
+    )
     opt = parser.parse_args()
 
     if opt.laion400m:
@@ -448,9 +456,22 @@ def main():
                         _ = qnn(cali_xs[:init_batch_size].cuda(), cali_ts[:init_batch_size].cuda(), cali_cs[:init_batch_size].cuda(), 
                                 added_cond_kwargs=added_cond_kwargs, debug=True,
                                 )
-                    logger.info("Initializing has done!") 
+                    logger.info("Initializing has done!")
+                    if opt.save_after_init:
+                        logger.info("Saving calibrated quantized UNet model")
+                        for m in qnn.model.modules():
+                            if isinstance(m, AdaRoundQuantizer):
+                                m.zero_point = nn.Parameter(m.zero_point)
+                                m.delta = nn.Parameter(m.delta)
+                            elif isinstance(m, UniformAffineQuantizer) and opt.quant_act:
+                                if m.zero_point is not None:
+                                    if not torch.is_tensor(m.zero_point):
+                                        m.zero_point = nn.Parameter(torch.tensor(float(m.zero_point)))
+                                    else:
+                                        m.zero_point = nn.Parameter(m.zero_point)
+                        torch.save(qnn.state_dict(), os.path.join(outpath, "ckpt_inited.pth"))
                 # Kwargs for weight rounding calibration
-                kwargs = dict(cali_data=cali_data, batch_size=opt.cali_batch_size, 
+                kwargs = dict(cali_data=[x[:opt.cali_data_size] for x in cali_data], batch_size=opt.cali_batch_size, 
                             iters=opt.cali_iters, weight=0.01, asym=True, b_range=(20, 2),
                             warmup=0.2, act_quant=False, opt_mode='mse', cond=opt.cond, sdxl=opt.sdxl)
                 
@@ -522,7 +543,8 @@ def main():
                             qnn.set_running_stat(False, opt.rs_sm_only)
 
                     kwargs = dict(
-                        cali_data=[x[:16] for x in cali_data], batch_size=opt.cali_batch_size, iters=opt.cali_iters_a, act_quant=True, 
+                        cali_data=[x[:opt.cali_data_size] for x in cali_data], 
+                        batch_size=opt.cali_batch_size, iters=opt.cali_iters_a, act_quant=True, 
                         opt_mode='mse', lr=opt.cali_lr, p=opt.cali_p, cond=opt.cond)
                     recon_model(qnn)
                     qnn.set_quant_state(weight_quant=True, act_quant=True)
