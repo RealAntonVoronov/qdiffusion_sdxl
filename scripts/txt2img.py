@@ -31,6 +31,11 @@ from qdiff.adaptive_rounding import AdaRoundQuantizer
 from qdiff.quant_layer import UniformAffineQuantizer
 from qdiff.utils import resume_cali_model, get_train_samples
 from scripts.generate_images import generate_with_quantized_sdxl
+try:
+    import nirvana_dl
+except ImportError:
+    print('NO NIRVANA DL PACKAGE')
+    nirvana_dl = None
 
 logger = logging.getLogger(__name__)
 
@@ -320,6 +325,9 @@ def main():
                             else:
                                 m.zero_point = nn.Parameter(m.zero_point)
                 torch.save(qnn.state_dict(), os.path.join(outpath, "ckpt_inited.pth"))
+                if nirvana_dl is not None:
+                    nirvana_dl.snapshot.dump_snapshot()
+
         # Kwargs for weight rounding calibration
         kwargs = dict(cali_data=cali_data, batch_size=opt.cali_batch_size, 
                     iters=opt.cali_iters, weight=0.01, asym=True, b_range=(20, 2),
@@ -335,9 +343,13 @@ def main():
                     logger.info("Finished calibrating input and mid blocks, saving temporary checkpoint...")
                     in_recon_done = True
                     torch.save(qnn.state_dict(), os.path.join(outpath, "ckpt.pth"))
+                    if nirvana_dl is not None:
+                        nirvana_dl.snapshot.dump_snapshot()
                 if name.isdigit() and int(name) >= 9:
                     logger.info(f"Saving temporary checkpoint at {name}...")
                     torch.save(qnn.state_dict(), os.path.join(outpath, "ckpt.pth"))
+                    if nirvana_dl is not None:
+                        nirvana_dl.snapshot.dump_snapshot()
                     
                 if isinstance(module, QuantModule):
                     if module.ignore_reconstruction is True:
@@ -410,6 +422,8 @@ def main():
                     else:
                         m.zero_point = nn.Parameter(m.zero_point)
         torch.save(qnn.state_dict(), os.path.join(outpath, "ckpt.pth"))
+        if nirvana_dl is not None:
+            nirvana_dl.snapshot.dump_snapshot()
 
     logger.info('sampling')
     if not opt.sdxl:
@@ -442,6 +456,8 @@ def main():
     res_grid.save(f"{outpath}/grid.jpg")
     for i, image in enumerate(res_images['student']):
         image.save(f'{outpath}/{i}.jpg')
+    if nirvana_dl is not None:
+        nirvana_dl.snapshot.dump_snapshot()
     logging.info(f"Your samples are ready and waiting for you here: \n{outpath} \n"
             f" \nEnjoy.")
     wandb.finish()
