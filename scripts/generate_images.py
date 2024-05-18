@@ -48,6 +48,7 @@ def parse_args():
     parser.add_argument("--num_images_per_prompt", type=int, default=4)
     parser.add_argument('--debug', action='store_true')
     parser.add_argument("--sdxl_path", default="stabilityai/stable-diffusion-xl-base-1.0")
+    parser.add_argument("--exp_name")
     args = parser.parse_args()
     return args
 
@@ -223,6 +224,7 @@ def main():
     sdxl_pipeline.unet = unet
 
     if args.debug:
+        wandb.init(entity='rock-and-roll', project='baselines', name=args.exp_name)
         res_images = {'teacher': []}
         for image in sorted(os.listdir('teacher_imgs')):
             if image.endswith('.jpg'):
