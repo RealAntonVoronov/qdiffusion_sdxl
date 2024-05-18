@@ -193,6 +193,14 @@ def generate_with_quantized_sdxl(pipe, prompt, num_images_per_prompt=1, output_t
         
         return pipe.image_processor.postprocess(image, output_type=output_type)
 
+
+def get_checkpoint_path(init_path):
+    inner_folder = os.listdir(os.path.join(init_path, 'auto_logs'))[0]
+    res_path = os.path.join(init_path, 'auto_logs', inner_folder, 'ckpt.pth')
+    print(res_path)
+    return res_path
+
+
 def main():
     args = parse_args()
     if args.precision == 'fp16':
@@ -209,7 +217,8 @@ def main():
         rank_eval_prompts, rank_eval_prompts_indices, all_text = prepare_prompts(args.eval_prompts_path)
 
     # load quantized unet
-    unet = load_quantized_unet(args.cali_ckpt, weight_bit=args.weight_bit, act_bit=args.act_bit, device=device)
+    ckpt_path = get_checkpoint_path(args.cali_ckpt)
+    unet = load_quantized_unet(ckpt_path, weight_bit=args.weight_bit, act_bit=args.act_bit, device=device)
     torch.cuda.empty_cache()
 
     # load model
