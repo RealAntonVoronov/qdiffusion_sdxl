@@ -300,8 +300,8 @@ def main():
                 images = generate_with_quantized_sdxl(sdxl_pipeline, prompt=list(batch), output_type='pil', device=device, disable_tqdm=True,
                                                       seed=seed, num_images_per_prompt=args.num_images_per_prompt)
                 for text_idx, global_idx in enumerate(rank_batches_index[seed]):
-                    for i in range(args.num_samples_per_prompt):
-                        idx = args.num_samples_per_prompt * text_idx + i
+                    for i in range(args.num_images_per_prompt):
+                        idx = args.num_images_per_prompt * text_idx + i
                         images[idx].save(os.path.join(args.save, f"{global_idx}_{i}.jpg"))
             dist.barrier()
 
