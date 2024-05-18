@@ -1,10 +1,12 @@
 import os
+import datetime
 from argparse import ArgumentParser
 from itertools import chain
 from contextlib import nullcontext
 
 import torch
 torch.set_num_threads(32)
+import torch.distributed as dist
 import numpy as np
 import pandas as pd
 import wandb
@@ -50,6 +52,7 @@ def parse_args():
     parser.add_argument("--sdxl_path", default="stabilityai/stable-diffusion-xl-base-1.0")
     parser.add_argument('--precision', choices=['fp16', 'fp32'], default='fp32')
     parser.add_argument("--exp_name")
+    parser.add_argument("--multigpu", action='store_true')
     args = parser.parse_args()
     return args
 
@@ -195,6 +198,8 @@ def generate_with_quantized_sdxl(pipe, prompt, num_images_per_prompt=1, output_t
 
 
 def get_checkpoint_path(init_path):
+    if os.path.exists(os.path.join(init_path, 'ckpt.pth')):
+        return os.path.join(init_path, 'ckpt.pth')
     if len(os.listdir(init_path)) > 0:
         inner_folder = sorted(os.listdir(init_path))[0]
         res_path = os.path.join(init_path, inner_folder, 'ckpt.pth')
@@ -203,21 +208,60 @@ def get_checkpoint_path(init_path):
 
     return res_path
 
+def dist_init():
+    """
+    Setup a distributed process group.
+    """
+    if dist.is_initialized():
+        return
+
+    if "MASTER_ADDR" not in os.environ:
+        os.environ["MASTER_ADDR"] = "localhost"
+    if "MASTER_PORT" not in os.environ:
+        os.environ["MASTER_PORT"] = "29500"
+    if "RANK" not in os.environ:
+        os.environ["RANK"] = "0"
+    if "LOCAL_RANK" not in os.environ:
+        os.environ["LOCAL_RANK"] = "0"
+    if "WORLD_SIZE" not in os.environ:
+        os.environ["WORLD_SIZE"] = "1"
+
+    backend = "gloo" if not torch.cuda.is_available() else "nccl"
+    dist.init_process_group(backend=backend, timeout=datetime.timedelta(0, 3600))
+    torch.cuda.set_device(int(os.environ.get("LOCAL_RANK", "0")))
+
+def prepare_prompts_multigpu(prompts_path):
+    bs = 1
+    df = pd.read_csv(prompts_path)
+    all_text = list(df["captions"])[:4]
+
+    num_batches = ((len(all_text) - 1) // (bs * dist.get_world_size()) + 1) * dist.get_world_size()
+    all_batches = np.array_split(np.array(all_text), num_batches)
+    rank_batches = all_batches[dist.get_rank() :: dist.get_world_size()]
+
+    index_list = np.arange(len(all_text))
+    all_batches_index = np.array_split(index_list, num_batches)
+    rank_batches_index = all_batches_index[dist.get_rank() :: dist.get_world_size()]
+    return rank_batches, rank_batches_index, all_text
+
 
 def main():
     args = parse_args()
+    if args.multigpu:
+        dist_init()
     if args.precision == 'fp16':
         torch_dtype = torch.float16
     else:
         torch_dtype = torch.float32
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-    os.makedirs(args.out_path, exist_ok=True)
-
     if args.debug:
         prompts = pd.read_csv("eval_prompts/parti-prompts-eval.csv")['captions'].tolist()[:8]
     else:
-        rank_eval_prompts, rank_eval_prompts_indices, all_text = prepare_prompts(args.eval_prompts_path)
+        if args.multigpu:
+            rank_batches, rank_batches_index, all_text = prepare_prompts_multigpu(args.eval_prompts_path)
+        else:
+            rank_eval_prompts, rank_eval_prompts_indices, all_text = prepare_prompts(args.eval_prompts_path)
 
     # load quantized unet
     ckpt_path = get_checkpoint_path(args.cali_ckpt)
@@ -226,9 +270,9 @@ def main():
 
     # load model
     sdxl_pipeline = StableDiffusionXLPipeline.from_pretrained(args.sdxl_path, use_safetensors=True,
-                                                                torch_dtype=torch_dtype, variant='fp16',
-                                                                scheduler=DDIMScheduler.from_config(args.sdxl_path, subfolder="scheduler"),
-                                                                ).to(device)
+                                                              torch_dtype=torch_dtype, variant='fp16',
+                                                              scheduler=DDIMScheduler.from_config(args.sdxl_path, subfolder="scheduler"),
+                                                              ).to(device)
     
     # change pipelines' unet to a quantized one
     sdxl_pipeline.unet = unet
@@ -249,13 +293,27 @@ def main():
         images = wandb.Image(res_grid, caption="Left: Teacher, Right: Student")
         wandb.log({"examples": images}, step=0)
     else:
-        for i, prompts in enumerate(rank_eval_prompts):
-            for seed, batch in enumerate(tqdm(prompts)):
+        if args.multigpu:
+            if dist.get_rank() == 0:
+                os.makedirs(args.out_path, exist_ok=True)
+            for seed, batch in enumerate(tqdm(rank_batches, unit="batch", disable=(dist.get_rank() != 0))):
                 images = generate_with_quantized_sdxl(sdxl_pipeline, prompt=list(batch), output_type='pil', device=device, disable_tqdm=True,
                                                       seed=seed, num_images_per_prompt=args.num_images_per_prompt)
-                for j, image in enumerate(images):
-                    image.save(f"{args.out_path}/{rank_eval_prompts_indices[i][seed][0]}_{j}.jpg")
+                for text_idx, global_idx in enumerate(rank_batches_index[seed]):
+                    for i in range(args.num_samples_per_prompt):
+                        idx = args.num_samples_per_prompt * text_idx + i
+                        images[idx].save(os.path.join(args.save, f"{global_idx}_{i}.jpg"))
+            dist.barrier()
 
+        else:
+            os.makedirs(args.out_path, exist_ok=True)
+            # imitate 2 gpus
+            for i, prompts in enumerate(rank_eval_prompts):
+                for seed, batch in enumerate(tqdm(prompts)):
+                    images = generate_with_quantized_sdxl(sdxl_pipeline, prompt=list(batch), output_type='pil', device=device, disable_tqdm=True,
+                                                          seed=seed, num_images_per_prompt=args.num_images_per_prompt)
+                    for j, image in enumerate(images):
+                        image.save(f"{args.out_path}/{rank_eval_prompts_indices[i][seed][0]}_{j}.jpg")
 
 
 if __name__ == '__main__':
