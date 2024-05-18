@@ -48,6 +48,7 @@ def parse_args():
     parser.add_argument("--num_images_per_prompt", type=int, default=4)
     parser.add_argument('--debug', action='store_true')
     parser.add_argument("--sdxl_path", default="stabilityai/stable-diffusion-xl-base-1.0")
+    parser.add_argument('--precision', choices=['fp16', 'fp32'], default='fp32')
     parser.add_argument("--exp_name")
     args = parser.parse_args()
     return args
@@ -163,12 +164,13 @@ def generate_with_quantized_sdxl(pipe, prompt, num_images_per_prompt=1, output_t
                 # predict the noise residual
                 added_cond_kwargs = {"text_embeds": add_text_embeds, "time_ids": add_time_ids}
                 
-                noise_pred = pipe.unet(
-                    latent_model_input,
-                    t,
-                    context=prompt_embeds,
-                    added_cond_kwargs=added_cond_kwargs,
-                )
+                with torch.autocast('cuda'):
+                    noise_pred = pipe.unet(
+                        latent_model_input,
+                        t,
+                        context=prompt_embeds,
+                        added_cond_kwargs=added_cond_kwargs,
+                    )
                 # perform guidance
                 noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
                 noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
@@ -193,6 +195,10 @@ def generate_with_quantized_sdxl(pipe, prompt, num_images_per_prompt=1, output_t
 
 def main():
     args = parse_args()
+    if args.precision == 'fp16':
+        torch_dtype = torch.float16
+    else:
+        torch_dtype = torch.float32
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
     os.makedirs(args.out_path, exist_ok=True)
@@ -205,7 +211,7 @@ def main():
     if args.debug:
         # load model
         sdxl_pipeline = StableDiffusionXLPipeline.from_pretrained(args.sdxl_path, use_safetensors=True,
-                                                                  torch_dtype=torch.float32, variant='fp16',
+                                                                  torch_dtype=torch_dtype, variant='fp16',
                                                                   scheduler=DDIMScheduler.from_config(args.sdxl_path, subfolder="scheduler"),
                                                                   ).to(device)
         # load quantized unet
@@ -218,6 +224,7 @@ def main():
 
         # load model
         sdxl_pipeline = StableDiffusionXLPipeline.from_pretrained(args.sdxl_path, use_safetensors=True,
+                                                                  torch_dtype=torch_dtype, variant='fp16',
                                                                   scheduler=DDIMScheduler.from_config(args.sdxl_path, subfolder="scheduler"),
                                                                   ).to(device)
     
@@ -243,7 +250,7 @@ def main():
         for i, prompts in enumerate(rank_eval_prompts):
             for seed, batch in enumerate(tqdm(prompts)):
                 images = generate_with_quantized_sdxl(sdxl_pipeline, prompt=list(batch), output_type='pil', device=device, disable_tqdm=True,
-                                                    seed=seed, num_images_per_prompt=args.num_images_per_prompt)
+                                                      seed=seed, num_images_per_prompt=args.num_images_per_prompt)
                 for j, image in enumerate(images):
                     image.save(f"{args.out_path}/{rank_eval_prompts_indices[i][seed][0]}_{j}.jpg")
 
