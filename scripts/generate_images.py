@@ -302,7 +302,7 @@ def main():
                 for text_idx, global_idx in enumerate(rank_batches_index[seed]):
                     for i in range(args.num_images_per_prompt):
                         idx = args.num_images_per_prompt * text_idx + i
-                        images[idx].save(os.path.join(args.save, f"{global_idx}_{i}.jpg"))
+                        images[idx].save(os.path.join(args.out_path, f"{global_idx}_{i}.jpg"))
             dist.barrier()
 
         else:
