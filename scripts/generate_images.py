@@ -205,6 +205,7 @@ def main():
     if args.debug:
         # load model
         sdxl_pipeline = StableDiffusionXLPipeline.from_pretrained(args.sdxl_path, use_safetensors=True,
+                                                                  torch_dtype=torch.float32, variant='fp16',
                                                                   scheduler=DDIMScheduler.from_config(args.sdxl_path, subfolder="scheduler"),
                                                                   ).to(device)
         # load quantized unet
