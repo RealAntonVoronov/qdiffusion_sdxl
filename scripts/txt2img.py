@@ -215,10 +215,18 @@ def main():
     parser.add_argument(
         "--sdxl_path", default="stabilityai/stable-diffusion-xl-base-1.0",
     )
+    parser.add_argument('--precision', choices=['fp16', 'fp32'], default='fp32')
     opt = parser.parse_args()
+
+    if opt.precision == 'fp16':
+        torch_dtype = torch.float16
+    else:
+        torch_dtype = torch.float32
+
     if opt.exp_name is None:
         opt.exp_name = f"{opt.scale_method}_init_s{opt.cali_data_size}_iters{opt.cali_iters}"
     wandb.init(entity='rock-and-roll', project='baselines', name=opt.exp_name)
+
     seed_everything(opt.seed)
 
     os.makedirs(opt.outdir, exist_ok=True)
@@ -439,7 +447,7 @@ def main():
     else:
         torch.cuda.empty_cache()
         sdxl_pipeline = StableDiffusionXLPipeline.from_pretrained(opt.sdxl_path,
-                                                                  # torch_dtype=torch_dtype, variant=variant, 
+                                                                  torch_dtype=torch_dtype, variant='fp16', 
                                                                   use_safetensors=True,
                                                                   scheduler=DDIMScheduler.from_config(opt.sdxl_path, subfolder="scheduler"),
                                                                   ).to(device)
