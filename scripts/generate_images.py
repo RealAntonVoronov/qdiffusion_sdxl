@@ -1,13 +1,17 @@
 import os
 from argparse import ArgumentParser
+from itertools import chain
 from contextlib import nullcontext
 
 import torch
 torch.set_num_threads(32)
 import numpy as np
 import pandas as pd
+import wandb
+from PIL import Image
 from tqdm import tqdm, trange
 from diffusers import StableDiffusionXLPipeline, DDIMScheduler
+from diffusers.utils import make_image_grid
 
 from ldm.modules.diffusionmodules.sdxl_unet import QDiffusionUNet
 from qdiff.quant_model import QuantModel
@@ -42,6 +46,8 @@ def parse_args():
     parser.add_argument("--weight_bit", type=int, default=4)
     parser.add_argument("--act_bit", type=int, default=32)
     parser.add_argument("--num_images_per_prompt", type=int, default=4)
+    parser.add_argument('--debug', action='store_true')
+    parser.add_argument("--sdxl_path", default="stabilityai/stable-diffusion-xl-base-1.0")
     args = parser.parse_args()
     return args
 
@@ -190,25 +196,53 @@ def main():
 
     os.makedirs(args.out_path, exist_ok=True)
 
-    rank_eval_prompts, rank_eval_prompts_indices, all_text = prepare_prompts(args.eval_prompts_path)
+    if args.debug:
+        prompts = pd.read_csv("eval_prompts/parti-prompts-eval.csv")['captions'].tolist()[:8]
+    else:
+        rank_eval_prompts, rank_eval_prompts_indices, all_text = prepare_prompts(args.eval_prompts_path)
 
-    # load quantized unet
-    unet = load_quantized_unet(args.cali_ckpt, weight_bit=args.weight_bit, act_bit=args.act_bit, device=device)
+    if args.debug:
+        # load model
+        sdxl_pipeline = StableDiffusionXLPipeline.from_pretrained(args.sdxl_path, use_safetensors=True,
+                                                                  scheduler=DDIMScheduler.from_config(args.sdxl_path, subfolder="scheduler"),
+                                                                  ).to(device)
+        # load quantized unet
+        unet = load_quantized_unet(args.cali_ckpt, weight_bit=args.weight_bit, act_bit=args.act_bit, device=device)
+        torch.cuda.empty_cache()
+    else:
+        # load quantized unet
+        unet = load_quantized_unet(args.cali_ckpt, weight_bit=args.weight_bit, act_bit=args.act_bit, device=device)
+        torch.cuda.empty_cache()
+
+        # load model
+        sdxl_pipeline = StableDiffusionXLPipeline.from_pretrained(args.sdxl_path, use_safetensors=True,
+                                                                  scheduler=DDIMScheduler.from_config(args.sdxl_path, subfolder="scheduler"),
+                                                                  ).to(device)
     
-    # load model
-    sdxl_path = "stabilityai/stable-diffusion-xl-base-1.0"
-    sdxl_pipeline = StableDiffusionXLPipeline.from_pretrained(sdxl_path, use_safetensors=True,
-                                                              scheduler=DDIMScheduler.from_config(sdxl_path, subfolder="scheduler"),
-                                                              ).to(device)
     # change pipelines' unet to a quantized one
     sdxl_pipeline.unet = unet
 
-    for i, prompts in enumerate(rank_eval_prompts):
-        for seed, batch in enumerate(tqdm(prompts)):
-            images = generate_with_quantized_sdxl(sdxl_pipeline, prompt=list(batch), output_type='pil', device=device, disable_tqdm=True,
-                                                  seed=seed, num_images_per_prompt=args.num_images_per_prompt)
-            for j, image in enumerate(images):
-                image.save(f"{args.out_path}/{rank_eval_prompts_indices[i][seed][0]}_{j}.jpg")
+    if args.debug:
+        res_images = {'teacher': []}
+        for image in sorted(os.listdir('teacher_imgs')):
+            if image.endswith('.jpg'):
+                res_images['teacher'].append(Image.open(f'teacher_imgs/{image}'))
+        res_images['student'] = generate_with_quantized_sdxl(sdxl_pipeline, prompt=prompts, output_type='pil', device=device, disable_tqdm=False,
+                                                             seed=42, num_images_per_prompt=1)
+        
+        images_1 = res_images['teacher']
+        images_2 = res_images['student']
+
+        res_grid = make_image_grid(list(chain.from_iterable(zip(images_1, images_2))), rows=len(images_1), cols=2, resize=512)
+        images = wandb.Image(res_grid, caption="Left: Teacher, Right: Student")
+        wandb.log({"examples": images}, step=0)
+    else:
+        for i, prompts in enumerate(rank_eval_prompts):
+            for seed, batch in enumerate(tqdm(prompts)):
+                images = generate_with_quantized_sdxl(sdxl_pipeline, prompt=list(batch), output_type='pil', device=device, disable_tqdm=True,
+                                                    seed=seed, num_images_per_prompt=args.num_images_per_prompt)
+                for j, image in enumerate(images):
+                    image.save(f"{args.out_path}/{rank_eval_prompts_indices[i][seed][0]}_{j}.jpg")
 
 
 
