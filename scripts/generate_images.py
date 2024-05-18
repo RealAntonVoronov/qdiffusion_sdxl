@@ -233,7 +233,7 @@ def dist_init():
 def prepare_prompts_multigpu(prompts_path):
     bs = 1
     df = pd.read_csv(prompts_path)
-    all_text = list(df["captions"])[:4]
+    all_text = list(df["captions"])
 
     num_batches = ((len(all_text) - 1) // (bs * dist.get_world_size()) + 1) * dist.get_world_size()
     all_batches = np.array_split(np.array(all_text), num_batches)
