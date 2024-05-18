@@ -208,25 +208,15 @@ def main():
     else:
         rank_eval_prompts, rank_eval_prompts_indices, all_text = prepare_prompts(args.eval_prompts_path)
 
-    if args.debug:
-        # load model
-        sdxl_pipeline = StableDiffusionXLPipeline.from_pretrained(args.sdxl_path, use_safetensors=True,
-                                                                  torch_dtype=torch_dtype, variant='fp16',
-                                                                  scheduler=DDIMScheduler.from_config(args.sdxl_path, subfolder="scheduler"),
-                                                                  ).to(device)
-        # load quantized unet
-        unet = load_quantized_unet(args.cali_ckpt, weight_bit=args.weight_bit, act_bit=args.act_bit, device=device)
-        torch.cuda.empty_cache()
-    else:
-        # load quantized unet
-        unet = load_quantized_unet(args.cali_ckpt, weight_bit=args.weight_bit, act_bit=args.act_bit, device=device)
-        torch.cuda.empty_cache()
+    # load quantized unet
+    unet = load_quantized_unet(args.cali_ckpt, weight_bit=args.weight_bit, act_bit=args.act_bit, device=device)
+    torch.cuda.empty_cache()
 
-        # load model
-        sdxl_pipeline = StableDiffusionXLPipeline.from_pretrained(args.sdxl_path, use_safetensors=True,
-                                                                  torch_dtype=torch_dtype, variant='fp16',
-                                                                  scheduler=DDIMScheduler.from_config(args.sdxl_path, subfolder="scheduler"),
-                                                                  ).to(device)
+    # load model
+    sdxl_pipeline = StableDiffusionXLPipeline.from_pretrained(args.sdxl_path, use_safetensors=True,
+                                                                torch_dtype=torch_dtype, variant='fp16',
+                                                                scheduler=DDIMScheduler.from_config(args.sdxl_path, subfolder="scheduler"),
+                                                                ).to(device)
     
     # change pipelines' unet to a quantized one
     sdxl_pipeline.unet = unet
