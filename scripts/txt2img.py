@@ -212,6 +212,9 @@ def main():
     parser.add_argument(
         "--exp_name", default='sdxl_w4a32',
     )
+    parser.add_argument(
+        "--sdxl_path", default="stabilityai/stable-diffusion-xl-base-1.0",
+    )
     opt = parser.parse_args()
     if opt.exp_name is None:
         opt.exp_name = f"{opt.scale_method}_init_s{opt.cali_data_size}_iters{opt.cali_iters}"
@@ -248,8 +251,7 @@ def main():
     else:
         # torch_dtype = torch.float16 if opt.sdxl_fp16 else torch.float32
         # variant = "fp16" if opt.sdxl_fp16 else None
-        sdxl_path = "stabilityai/stable-diffusion-xl-base-1.0"
-        unet = QDiffusionUNet.from_pretrained(sdxl_path, use_safetensors=True,
+        unet = QDiffusionUNet.from_pretrained(opt.sdxl_path, use_safetensors=True,
                                             #   torch_dtype=torch_dtype, variant=variant,
                                               subfolder='unet',
                                               ).to(device)
@@ -435,12 +437,11 @@ def main():
         sampler.model.model.diffusion_model = qnn
     else:
         torch.cuda.empty_cache()
-        sdxl_path = "stabilityai/stable-diffusion-xl-base-1.0"
-        sdxl_pipeline = StableDiffusionXLPipeline.from_pretrained(sdxl_path,
-                                                                    torch_dtype=torch_dtype, variant=variant, 
-                                                                    use_safetensors=True,
-                                                                    scheduler=DDIMScheduler.from_config(sdxl_path, subfolder="scheduler"),
-                                                                    ).to(device)
+        sdxl_pipeline = StableDiffusionXLPipeline.from_pretrained(opt.sdxl_path,
+                                                                  # torch_dtype=torch_dtype, variant=variant, 
+                                                                  use_safetensors=True,
+                                                                  scheduler=DDIMScheduler.from_config(opt.sdxl_path, subfolder="scheduler"),
+                                                                  ).to(device)
         sdxl_pipeline.unet = qnn
 
     captions = pd.read_csv('eval_prompts/parti-prompts-eval.csv')["captions"].tolist()[:8]
