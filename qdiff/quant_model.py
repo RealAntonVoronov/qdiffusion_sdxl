@@ -11,11 +11,13 @@ logger = logging.getLogger(__name__)
 
 class QuantModel(nn.Module):
 
-    def __init__(self, model: nn.Module, weight_quant_params: dict = {}, act_quant_params: dict = {}, **kwargs):
+    def __init__(self, model: nn.Module, weight_quant_params: dict = {}, act_quant_params: dict = {}, skip_time_embeddings=False,
+                 **kwargs):
         super().__init__()
         self.model = model
         self.sm_abit = kwargs.get('sm_abit', 8)
         self.in_channels = model.in_channels
+        self.skip_time_embeddings = skip_time_embeddings
         if hasattr(model, 'image_size'):
             self.image_size = model.image_size
         self.specials = get_specials(act_quant_params['leaf_param'])
@@ -31,6 +33,8 @@ class QuantModel(nn.Module):
         """
         prev_quantmodule = None
         for name, child_module in module.named_children():
+            if self.skip_time_embeddings and name in ['time_proj', 'time_embedding', 'add_embedding', 'add_time_proj']:
+                continue
             if isinstance(child_module, (nn.Conv2d, nn.Conv1d, nn.Linear)): # nn.Conv1d
                 setattr(module, name, QuantModule(
                     child_module, weight_quant_params, act_quant_params))

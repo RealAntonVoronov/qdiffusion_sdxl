@@ -216,6 +216,7 @@ def main():
         "--sdxl_path", default="stabilityai/stable-diffusion-xl-base-1.0",
     )
     parser.add_argument('--precision', choices=['fp16', 'fp32'], default='fp32')
+    parser.add_argument("--skip_time_embeddings", action='store_true', help="disable timestep embeddings quantization")
     opt = parser.parse_args()
 
     if opt.precision == 'fp16':
@@ -278,7 +279,7 @@ def main():
         wq_params['scale_method'] = 'max'
     qnn = QuantModel(
         model=unet, weight_quant_params=wq_params, act_quant_params=aq_params,
-        act_quant_mode="qdiff", sm_abit=opt.sm_abit)
+        act_quant_mode="qdiff", sm_abit=opt.sm_abit, skip_time_embeddings=opt.skip_time_embeddings)
     qnn.cuda()
     qnn.eval()
 
