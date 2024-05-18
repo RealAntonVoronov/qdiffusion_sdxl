@@ -195,9 +195,9 @@ def generate_with_quantized_sdxl(pipe, prompt, num_images_per_prompt=1, output_t
 
 
 def get_checkpoint_path(init_path):
-    inner_folder = os.listdir(os.path.join(init_path, 'auto_logs'))[0]
-    res_path = os.path.join(init_path, 'auto_logs', inner_folder, 'pydl_inner_cube', 'ckpt.pth')
-    print(res_path)
+    inner_folder = sorted(os.listdir(init_path))[0]
+    res_path = os.path.join(init_path, inner_folder, 'ckpt.pth')
+
     return res_path
 
 

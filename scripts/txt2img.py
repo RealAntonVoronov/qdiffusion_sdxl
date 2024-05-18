@@ -229,9 +229,8 @@ def main():
 
     seed_everything(opt.seed)
 
+    outpath = opt.outdir
     os.makedirs(opt.outdir, exist_ok=True)
-    outpath = os.path.join(opt.outdir, datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S"))
-    os.makedirs(outpath)
 
     log_path = os.path.join(outpath, "run.log")
     logging.basicConfig(
