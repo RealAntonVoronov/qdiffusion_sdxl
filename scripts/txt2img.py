@@ -251,8 +251,9 @@ def main():
     else:
         # torch_dtype = torch.float16 if opt.sdxl_fp16 else torch.float32
         # variant = "fp16" if opt.sdxl_fp16 else None
-        unet = QDiffusionUNet.from_pretrained(opt.sdxl_path, use_safetensors=True,
-                                            #   torch_dtype=torch_dtype, variant=variant,
+        sdxl_path = "stabilityai/stable-diffusion-xl-base-1.0"
+        unet = QDiffusionUNet.from_pretrained(sdxl_path, use_safetensors=True,
+                                              # torch_dtype=torch_dtype, variant=variant,
                                               subfolder='unet',
                                               ).to(device)
 
