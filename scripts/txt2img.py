@@ -451,7 +451,7 @@ def main():
                                                                   use_safetensors=True,
                                                                   scheduler=DDIMScheduler.from_config(opt.sdxl_path, subfolder="scheduler"),
                                                                   ).to(device)
-        sdxl_pipeline.unet = qnn
+        sdxl_pipeline.unet = unet
 
     captions = pd.read_csv('eval_prompts/parti-prompts-eval.csv')["captions"].tolist()[:8]
     res_images = {'teacher': []}
