@@ -217,6 +217,8 @@ def main():
     )
     parser.add_argument('--precision', choices=['fp16', 'fp32'], default='fp32')
     parser.add_argument("--skip_time_embeddings", action='store_true', help="disable timestep embeddings quantization")
+    parser.add_argument('--ptq_timesteps', action='store_true', 
+                        help='if true timesteps are sampled from shifted normal distribution like in PTQ4DM')
     opt = parser.parse_args()
 
     if opt.precision == 'fp16':
@@ -298,7 +300,7 @@ def main():
         logger.info(f"Sampling data from {opt.cali_st} timesteps for calibration")
         if opt.cali_data_path:
             sample_data = torch.load(opt.cali_data_path)
-            cali_data = get_train_samples(opt, sample_data, opt.ddim_steps, sdxl=opt.sdxl)
+            cali_data = get_train_samples(opt, sample_data, opt.ddim_steps, sdxl=opt.sdxl, ptq_timesteps=opt.ptq_timesteps)
             cali_data = [x[:opt.cali_data_size].to(unet.dtype) for x in cali_data]
             del(sample_data)
             gc.collect()

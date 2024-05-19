@@ -374,31 +374,59 @@ def quantize_model_till(model: QuantModule, layer: Union[QuantModule, BaseQuantB
         if module == layer:
             break
 
-def get_train_samples_sdxl(sample_data, n_samples=128, n_steps=25, custom_steps=50):
+def get_train_samples_sdxl(sample_data, n_samples=128, n_steps=25, custom_steps=50, ptq_timesteps=False):
     max_n_steps = len(sample_data["ts"])
     assert max_n_steps >= custom_steps
-    timesteps = list(range(0, max_n_steps, max_n_steps // n_steps))
-    print(f'Selected {len(timesteps)} steps from {max_n_steps} sampling steps')
-    # latents, add_text_embeds and add_time_ids are already concatenated for classifier-free guidance
-    # therefore n_samples needs to be adjusted
-    n_samples *= 2
-    latent_inputs = [sample_data["xs"][i][:n_samples] for i in timesteps]
-    ts = [sample_data["ts"][i].repeat(n_samples) for i in timesteps]
-    prompt_embeds = [sample_data["prompt_embeds"][:n_samples] for _ in timesteps]
-    add_text_embeds = [sample_data["add_text_embeds"][:n_samples] for _ in timesteps]
-    add_time_ids = sample_data["add_time_ids"].unsqueeze(0).repeat(n_samples * len(timesteps), 1)
+    if ptq_timesteps:
+        scheduler_steps = sample_data['ts'].tolist()[::-1]
+
+        # shifted normal with parameters from https://github.com/42Shawn/PTQ4DM/blob/main/PTQ4DM/quant_sample_ddim_in_backward_DNTC.sh
+        timesteps_ids = torch.nn.init.normal_(torch.empty(2048), mean=.4, std=.4)
+        timesteps_ids = torch.clamp(timesteps_ids, 0, 1)
+        # transform (-inf; inf) distribution into [0, scheduler.num_steps]
+        timesteps_ids *= max_n_steps - 1
+        timesteps_ids = [int(x) for x in timesteps_ids]
+        # get scheduler timesteps from random timestep_ids
+        timesteps = [scheduler_steps[x] for x in timesteps_ids]
+        
+        latent_inputs, ts, prompt_embeds, add_text_embeds = [], [], [], []
+
+        for i in range(n_samples):
+            for j in range(n_steps):
+                # for each prompt we have a pair of latents, prompt_embeds and add_embeds because of guidance
+                ts.extend([timesteps[i*n_steps + j], timesteps[i*n_steps + j]])
+                latent_inputs.append(sample_data['xs'][timesteps_ids[i*n_steps + j], i*2:(i+1)*2])
+                prompt_embeds.append(sample_data['prompt_embeds'][i*2:(i+1)*2])
+                add_text_embeds.append(sample_data['add_text_embeds'][i*2:(i+1)*2])
+        latent_inputs = torch.cat(latent_inputs)
+        ts = torch.tensor(ts)
+        conds = torch.cat(prompt_embeds)
+        add_text_embeds = torch.cat(add_text_embeds)
+        add_time_ids = sample_data['add_time_ids'].repeat(latent_inputs.size(0), 1)
+    else:
+        timesteps = list(range(0, max_n_steps, max_n_steps // n_steps))
+        print(f'Selected {len(timesteps)} steps from {max_n_steps} sampling steps')
+        # latents, add_text_embeds and add_time_ids are already concatenated for classifier-free guidance
+        # therefore n_samples needs to be adjusted
+        n_samples *= 2
+        latent_inputs = [sample_data["xs"][i][:n_samples] for i in timesteps]
+        ts = [sample_data["ts"][i].repeat(n_samples) for i in timesteps]
+        prompt_embeds = [sample_data["prompt_embeds"][:n_samples] for _ in timesteps]
+        add_text_embeds = [sample_data["add_text_embeds"][:n_samples] for _ in timesteps]
+        add_time_ids = sample_data["add_time_ids"].unsqueeze(0).repeat(n_samples * len(timesteps), 1)
     
-    latent_inputs = torch.cat(latent_inputs)
-    ts = torch.cat(ts)
-    conds = torch.cat(prompt_embeds)
-    add_text_embeds = torch.cat(add_text_embeds)
+        latent_inputs = torch.cat(latent_inputs)
+        ts = torch.cat(ts)
+        conds = torch.cat(prompt_embeds)
+        add_text_embeds = torch.cat(add_text_embeds)
     
     return latent_inputs, ts, conds, add_text_embeds, add_time_ids
 
 
-def get_train_samples(args, sample_data, custom_steps=None, sdxl=False):
+def get_train_samples(args, sample_data, custom_steps=None, sdxl=False, ptq_timesteps=False):
     if sdxl:
-        return get_train_samples_sdxl(sample_data, n_samples=args.cali_n, n_steps=args.cali_st, custom_steps=args.ddim_steps)
+        return get_train_samples_sdxl(sample_data, n_samples=args.cali_n, n_steps=args.cali_st, 
+                                      custom_steps=args.ddim_steps, ptq_timesteps=ptq_timesteps)
     num_samples, num_st = args.cali_n, args.cali_st
     custom_steps = args.custom_steps if custom_steps is None else custom_steps
     if num_st == 1:
