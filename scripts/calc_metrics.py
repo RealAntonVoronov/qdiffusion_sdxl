@@ -225,7 +225,7 @@ if __name__ == "__main__":
     images, prompts = distributed_sampling(sdxl_pipeline, device, args)
     if dist.get_rank() == 0:
         for i, image in enumerate(images):
-            image.save(os.path.join(args.out_path, f"{i:4d}.jpg"))
+            image.save(os.path.join(args.out_path, f"{i:04d}.jpg"))
         with open(os.path.join(args.out_path, 'prompts.txt'), 'w') as f:
             f.writelines('\n'.join(prompts))
 
