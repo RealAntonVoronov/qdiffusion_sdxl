@@ -82,8 +82,11 @@ def load_quantized_unet(ckpt_path, weight_bit=4, act_bit=32, device='cuda'):
 
 
 def generate_with_quantized_sdxl(pipe, prompt, num_images_per_prompt=1, output_type='pt',
-                                 device='cuda', seed=59, guidance_scale=5, num_inference_steps=50, disable_tqdm=False):
-    generator = torch.Generator(device=device).manual_seed(seed)
+                                 device='cuda', seed=None, guidance_scale=5, num_inference_steps=50, disable_tqdm=False):
+    if seed is not None:
+        generator = torch.Generator(device=device).manual_seed(seed)
+    else:
+        generator = None
     device = generator.device
 
     # 0. Default height and width to unet
@@ -200,13 +203,12 @@ def generate_with_quantized_sdxl(pipe, prompt, num_images_per_prompt=1, output_t
 def get_checkpoint_path(init_path):
     if os.path.exists(os.path.join(init_path, 'ckpt.pth')):
         return os.path.join(init_path, 'ckpt.pth')
-    if len(os.listdir(init_path)) > 0:
-        inner_folder = sorted(os.listdir(init_path))[0]
-        res_path = os.path.join(init_path, inner_folder, 'ckpt.pth')
     else:
-        res_path = os.path.join(init_path, 'ckpt.pth')
+        for inner_folder in sorted(os.listdir(init_path)):
+            new_path = os.path.join(init_path, inner_folder)
+            if os.path.isdir(new_path):
+                return get_checkpoint_path(new_path)
 
-    return res_path
 
 def dist_init():
     """
