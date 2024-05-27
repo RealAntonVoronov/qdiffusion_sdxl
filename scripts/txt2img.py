@@ -270,6 +270,8 @@ def main():
     # ptq
     if opt.split:
         setattr(unet, "split", True)
+        if opt.sdxl:
+            unet.block_refactor()
 
     wq_params = {'n_bits': opt.weight_bit, 'channel_wise': True, 'scale_method': opt.scale_method}
     aq_params = {'n_bits': opt.act_bit, 'channel_wise': False, 'scale_method': opt.scale_method, 'leaf_param':  opt.quant_act}

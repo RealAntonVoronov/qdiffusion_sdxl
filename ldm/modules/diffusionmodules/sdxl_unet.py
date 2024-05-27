@@ -1,9 +1,93 @@
 from diffusers import UNet2DConditionModel
+from diffusers.models.unets.unet_2d_blocks import UpBlock2D, CrossAttnUpBlock2D
 import time
 import logging
+
+import torch
+from torch import nn
 logger = logging.getLogger(__name__)
 
+class CustomUpBlock2D(nn.Module):
+    def __init__(self, orig_block, split=False):
+        super().__init__()
+        self.resnets = orig_block.resnets
+        self.upsamplers = orig_block.upsamplers
+        self.resolution_idx = orig_block.resolution_idx
+        self.split = split
+
+    def forward(self, hidden_states, res_hidden_states_tuple, temb=None, upsample_size=None):
+        for resnet in self.resnets:
+            # pop res hidden states
+            res_hidden_states = res_hidden_states_tuple[-1]
+            res_hidden_states_tuple = res_hidden_states_tuple[:-1]
+
+            if self.split:
+                split = hidden_states.shape[1]
+            else:
+                split = 0
+            hidden_states = torch.cat([hidden_states, res_hidden_states], dim=1)
+            hidden_states = resnet(hidden_states, temb, split=split)
+
+        if self.upsamplers is not None:
+            for upsampler in self.upsamplers:
+                hidden_states = upsampler(hidden_states, upsample_size)
+
+        return hidden_states
+
+
+class CustomCrossAttnUpBlock2D(nn.Module):
+    def __init__(self, orig_block, split=False):
+        super().__init__()
+        self.has_cross_attention = orig_block.has_cross_attention
+        self.num_attention_heads = orig_block.num_attention_heads
+
+        self.attentions = orig_block.attentions
+        self.resnets = orig_block.resnets
+        self.upsamplers = orig_block.upsamplers
+
+        self.gradient_checkpointing = False
+        self.resolution_idx = orig_block.resolution_idx
+        self.split = split
+
+    def forward(self, hidden_states, res_hidden_states_tuple, temb=None, encoder_hidden_states=None,
+                cross_attention_kwargs=None, upsample_size=None,
+                attention_mask=None, encoder_attention_mask=None,
+                ):
+        for resnet, attn in zip(self.resnets, self.attentions):
+            # pop res hidden states
+            res_hidden_states = res_hidden_states_tuple[-1]
+            res_hidden_states_tuple = res_hidden_states_tuple[:-1]
+
+            if self.split:
+                split = hidden_states.shape[1]
+            else:
+                split = 0
+
+            hidden_states = torch.cat([hidden_states, res_hidden_states], dim=1)
+
+            hidden_states = resnet(hidden_states, temb, split=split)
+            hidden_states = attn(
+                hidden_states,
+                encoder_hidden_states=encoder_hidden_states,
+                cross_attention_kwargs=cross_attention_kwargs,
+                attention_mask=attention_mask,
+                encoder_attention_mask=encoder_attention_mask,
+                return_dict=False,
+            )[0]
+
+        if self.upsamplers is not None:
+            for upsampler in self.upsamplers:
+                hidden_states = upsampler(hidden_states, upsample_size)
+
+        return hidden_states
+
+
 class QDiffusionUNet(UNet2DConditionModel):
+    def block_refactor(self):
+        self.up_blocks[0] = CustomCrossAttnUpBlock2D(self.up_blocks[0], split=self.split)
+        self.up_blocks[1] = CustomCrossAttnUpBlock2D(self.up_blocks[1], split=self.split)
+        self.up_blocks[2] = CustomUpBlock2D(self.up_blocks[2], split=self.split)
+
     def forward(self, x, timesteps=None, context=None, added_cond_kwargs=None, debug=False):
         """
         Apply the model to an input batch.
