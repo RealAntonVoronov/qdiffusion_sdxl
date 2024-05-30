@@ -188,6 +188,7 @@ if __name__ == "__main__":
     # diffusion inference params
     parser.add_argument("--num_inference_steps", type=int, default=50, help="number of inference steps used for calibration and evaluation")
     parser.add_argument("--guidance_scale", type=float, default=5, help="Guidance scale as defined in [Classifier-Free Diffusion Guidance]")
+    parser.add_argument("--split", action="store_true")
 
     args = parser.parse_args()
     args.num_images_per_prompt = 1
@@ -206,7 +207,7 @@ if __name__ == "__main__":
 
     # load quantized unet
     ckpt_path = get_checkpoint_path(args.quantized_model_path)
-    unet = load_quantized_unet(ckpt_path, weight_bit=args.weight_bit, act_bit=args.act_bit, device=device)
+    unet = load_quantized_unet(ckpt_path, weight_bit=args.weight_bit, act_bit=args.act_bit, device=device, split=args.split)
     torch.cuda.empty_cache()
 
     # load model

@@ -53,16 +53,21 @@ def parse_args():
     parser.add_argument('--precision', choices=['fp16', 'fp32'], default='fp32')
     parser.add_argument("--exp_name")
     parser.add_argument("--multigpu", action='store_true')
+    parser.add_argument("--split", action="store_true")
     args = parser.parse_args()
     return args
 
 
-def load_quantized_unet(ckpt_path, weight_bit=4, act_bit=32, device='cuda'):
+def load_quantized_unet(ckpt_path, weight_bit=4, act_bit=32, device='cuda', split=False):
     sdxl_path = "stabilityai/stable-diffusion-xl-base-1.0"
     unet = QDiffusionUNet.from_pretrained(sdxl_path, use_safetensors=True,
                                           subfolder='unet',
                                           ).to(device)
-    setattr(unet, 'split', False)
+    if split:
+        setattr(unet, "split", True)
+        unet.block_refactor()
+    else:
+        setattr(unet, "split", False)
 
     wq_params = {'n_bits': weight_bit, 'channel_wise': True, 'scale_method': 'max'}
     aq_params = {'n_bits': act_bit, 'channel_wise': False, 'scale_method': 'max', 'leaf_param':  False}
@@ -267,7 +272,7 @@ def main():
 
     # load quantized unet
     ckpt_path = get_checkpoint_path(args.cali_ckpt)
-    unet = load_quantized_unet(ckpt_path, weight_bit=args.weight_bit, act_bit=args.act_bit, device=device)
+    unet = load_quantized_unet(ckpt_path, weight_bit=args.weight_bit, act_bit=args.act_bit, device=device, split=args.split)
     torch.cuda.empty_cache()
 
     # load model
