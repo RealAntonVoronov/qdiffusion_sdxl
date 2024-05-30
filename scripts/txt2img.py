@@ -8,7 +8,7 @@ import pandas as pd
 import torch
 torch.set_num_threads(32)
 import torch.nn as nn
-import wandb
+# import wandb
 from omegaconf import OmegaConf
 from PIL import Image
 from tqdm import tqdm, trange
@@ -228,7 +228,7 @@ def main():
 
     if opt.exp_name is None:
         opt.exp_name = f"{opt.scale_method}_init_s{opt.cali_data_size}_iters{opt.cali_iters}"
-    wandb.init(entity='rock-and-roll', project='baselines', name=opt.exp_name)
+    # wandb.init(entity='rock-and-roll', project='baselines', name=opt.exp_name)
 
     seed_everything(opt.seed)
 
@@ -259,11 +259,9 @@ def main():
             sampler = DDIMSampler(model)
         unet = sampler.model.model.diffusion_model
     else:
-        # torch_dtype = torch.float16 if opt.sdxl_fp16 else torch.float32
-        # variant = "fp16" if opt.sdxl_fp16 else None
         sdxl_path = "stabilityai/stable-diffusion-xl-base-1.0"
         unet = QDiffusionUNet.from_pretrained(sdxl_path, use_safetensors=True,
-                                              # torch_dtype=torch_dtype, variant=variant,
+                                              torch_dtype=torch.float32, variant='fp16',
                                               subfolder='unet',
                                               ).to(device)
 
@@ -272,6 +270,8 @@ def main():
         setattr(unet, "split", True)
         if opt.sdxl:
             unet.block_refactor()
+    else:
+        setattr(unet, "split", False)
 
     wq_params = {'n_bits': opt.weight_bit, 'channel_wise': True, 'scale_method': opt.scale_method}
     aq_params = {'n_bits': opt.act_bit, 'channel_wise': False, 'scale_method': opt.scale_method, 'leaf_param':  opt.quant_act}
@@ -469,8 +469,8 @@ def main():
     images_2 = res_images['student']
 
     res_grid = make_image_grid(list(chain.from_iterable(zip(images_1, images_2))), rows=len(images_1), cols=2, resize=512)
-    images = wandb.Image(res_grid, caption="Left: Teacher, Right: Student")
-    wandb.log({"examples": images}, step=0)
+    # images = wandb.Image(res_grid, caption="Left: Teacher, Right: Student")
+    # wandb.log({"examples": images}, step=0)
     res_grid.save(f"{outpath}/grid.jpg")
     for i, image in enumerate(res_images['student']):
         image.save(f'{outpath}/{i}.jpg')
@@ -478,7 +478,7 @@ def main():
         nirvana_dl.snapshot.dump_snapshot()
     logging.info(f"Your samples are ready and waiting for you here: \n{outpath} \n"
             f" \nEnjoy.")
-    wandb.finish()
+    # wandb.finish()
 
     
 if __name__ == "__main__":
