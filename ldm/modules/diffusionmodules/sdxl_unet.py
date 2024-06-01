@@ -97,6 +97,11 @@ class QDiffusionUNet(UNet2DConditionModel):
         :param y: an [N] Tensor of labels, if class-conditional.
         :return: an [N x C x ...] Tensor of outputs.
         """
+        # cast inputs to unet dtype
+        x = x.to(self.dtype)
+        timesteps = timesteps.to(self.dtype)
+        context = context.to(self.dtype)
+        added_cond_kwargs = {k: v.to(self.dtype) for k, v in added_cond_kwargs.items()}
 
         # 1. time
         t0 = time.time()

@@ -294,7 +294,7 @@ def main():
     if opt.resume:
         if opt.sdxl:
             cali_data = (torch.randn(1, 4, 128, 128), torch.randint(0, 1000, (1,)), torch.randn(1, 77, 2048), torch.randn(1, 1280), torch.tensor([[1024, 1024, 0, 0, 1024, 1024]]))
-            cali_data = [x.to(unet.dtype) for x in cali_data]
+            # cali_data = [x.to(unet.dtype) for x in cali_data]
         else:
             cali_data = (torch.randn(1, 4, 64, 64), torch.randint(0, 1000, (1,)), torch.randn(1, 77, 768))
         resume_cali_model(qnn, opt.cali_ckpt, cali_data, opt.quant_act, "qdiff", cond=True, sdxl=opt.sdxl)
@@ -303,14 +303,14 @@ def main():
         if opt.cali_data_path:
             sample_data = torch.load(opt.cali_data_path)
             cali_data = get_train_samples(opt, sample_data, opt.ddim_steps, sdxl=opt.sdxl, ptq_timesteps=opt.ptq_timesteps)
-            cali_data = [x[:opt.cali_data_size].to(unet.dtype) for x in cali_data]
+            cali_data = [x[:opt.cali_data_size] for x in cali_data]
             del(sample_data)
             gc.collect()
             logger.info(f"Calibration data shape: {cali_data[0].shape} {cali_data[1].shape} {cali_data[2].shape}")
         else:
             cali_data = (torch.randn(6400, 4, 128, 128), torch.randint(0, 1000, (6400,)), torch.randn(6400, 77, 2048), torch.randn(6400, 1280), 
                             torch.tensor([[1024, 1024, 0, 0, 1024, 1024]]).repeat(6400, 1))
-            cali_data = [x.to(unet.dtype) for x in cali_data]
+            # cali_data = [x.to(unet.dtype) for x in cali_data]
 
         if opt.sdxl:
             cali_xs, cali_ts, cali_cs, cali_cs_pooled, cali_add_time_ids = cali_data
