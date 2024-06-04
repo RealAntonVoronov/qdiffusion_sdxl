@@ -8,6 +8,9 @@ from ldm.modules.attention import BasicTransformerBlock
 
 logger = logging.getLogger(__name__)
 
+def is_time_embedding(layer_name):
+    return any([x in layer_name for x in ['time_embedding', 'time_emb_proj']])
+
 
 class QuantModel(nn.Module):
 
@@ -33,7 +36,7 @@ class QuantModel(nn.Module):
         """
         prev_quantmodule = None
         for name, child_module in module.named_children():
-            if self.skip_time_embeddings and name in ['time_proj', 'time_embedding', 'add_embedding', 'add_time_proj']:
+            if self.skip_time_embeddings and is_time_embedding(name):
                 continue
             if isinstance(child_module, (nn.Conv2d, nn.Conv1d, nn.Linear)): # nn.Conv1d
                 setattr(module, name, QuantModule(
