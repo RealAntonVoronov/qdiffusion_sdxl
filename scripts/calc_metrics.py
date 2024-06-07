@@ -510,23 +510,23 @@ def distributed_sampling(pipeline, device, args):
     local_text_idxs = []
     generator = torch.Generator(device=device).manual_seed(args.seed)
     for cnt, mini_batch in enumerate(tqdm(rank_batches, unit="batch", disable=(dist.get_rank() != 0))):
-        # if args.generate_teacher:
-        #     images = pipeline(prompt=list(mini_batch), output_type='pil', device=device, 
-        #                       generator=generator, num_images_per_prompt=args.num_images_per_prompt,
-        #                       guidance_scale=args.guidance_scale, num_inference_steps=args.num_inference_steps,
-        #                       ).images
-        # else:
-        #     images = generate_with_quantized_sdxl(pipeline, prompt=list(mini_batch), output_type='pil', device=device, 
-        #                                           disable_tqdm=True, generator=generator, num_images_per_prompt=args.num_images_per_prompt,
-        #                                           guidance_scale=args.guidance_scale, num_inference_steps=args.num_inference_steps,
-        #                                           )
-        images = do_inference(pipeline,
-                prompt=list(mini_batch),
-                num_inference_steps=args.num_inference_steps,
-                num_images_per_prompt=args.num_images_per_prompt,
-                guidance_scale=args.guidance_scale,
-                generator=generator,
-            ).images
+        if args.generate_teacher:
+            images = pipeline(prompt=list(mini_batch), output_type='pil', device=device, 
+                              generator=generator, num_images_per_prompt=args.num_images_per_prompt,
+                              guidance_scale=args.guidance_scale, num_inference_steps=args.num_inference_steps,
+                              ).images
+        else:
+            images = generate_with_quantized_sdxl(pipeline, prompt=list(mini_batch), output_type='pil', device=device, 
+                                                  disable_tqdm=True, generator=generator, num_images_per_prompt=args.num_images_per_prompt,
+                                                  guidance_scale=args.guidance_scale, num_inference_steps=args.num_inference_steps,
+                                                  )
+        # images = do_inference(pipeline,
+        #         prompt=list(mini_batch),
+        #         num_inference_steps=args.num_inference_steps,
+        #         num_images_per_prompt=args.num_images_per_prompt,
+        #         guidance_scale=args.guidance_scale,
+        #         generator=generator,
+        #     ).images
 
         for text_idx, global_idx in enumerate(rank_batches_index[cnt]):
             img_tensor = torch.tensor(np.array(images[text_idx]))
