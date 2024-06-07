@@ -86,7 +86,7 @@ def load_quantized_unet(ckpt_path, weight_bit=4, act_bit=32, device='cuda', spli
     return unet
 
 
-def generate_with_quantized_sdxl(pipe, prompt, num_images_per_prompt=1, output_type='pt',
+def generate_with_quantized_sdxl(pipe, prompt, num_images_per_prompt=1, output_type='pt', generator=None,
                                  device='cuda', seed=None, guidance_scale=5, num_inference_steps=50, disable_tqdm=False):
     if seed is not None:
         generator = torch.Generator(device=device).manual_seed(seed)
