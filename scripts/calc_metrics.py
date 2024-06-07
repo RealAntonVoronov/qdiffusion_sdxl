@@ -98,7 +98,7 @@ def _inference_loop(
                     t,
                     **unet_kwargs,
                     return_dict=False,
-                )[0]
+                )
 
             # perform guidance
             if pipeline.do_classifier_free_guidance:
@@ -449,7 +449,7 @@ def do_inference(
 
     added_cond_kwargs = {"text_embeds": add_text_embeds, "time_ids": add_time_ids}
     unet_kwargs = dict(
-        encoder_hidden_states=prompt_embeds,
+        context=prompt_embeds,
         timestep_cond=timestep_cond,
         cross_attention_kwargs=pipeline.cross_attention_kwargs,
         added_cond_kwargs=added_cond_kwargs,
@@ -515,18 +515,19 @@ def distributed_sampling(pipeline, device, args):
                               generator=generator, num_images_per_prompt=args.num_images_per_prompt,
                               guidance_scale=args.guidance_scale, num_inference_steps=args.num_inference_steps,
                               ).images
-        else:
+        elif not args.vahe_code:
             images = generate_with_quantized_sdxl(pipeline, prompt=list(mini_batch), output_type='pil', device=device, 
                                                   disable_tqdm=True, generator=generator, num_images_per_prompt=args.num_images_per_prompt,
                                                   guidance_scale=args.guidance_scale, num_inference_steps=args.num_inference_steps,
                                                   )
-        # images = do_inference(pipeline,
-        #         prompt=list(mini_batch),
-        #         num_inference_steps=args.num_inference_steps,
-        #         num_images_per_prompt=args.num_images_per_prompt,
-        #         guidance_scale=args.guidance_scale,
-        #         generator=generator,
-        #     ).images
+        else:
+            images = do_inference(pipeline,
+                    prompt=list(mini_batch),
+                    num_inference_steps=args.num_inference_steps,
+                    num_images_per_prompt=args.num_images_per_prompt,
+                    guidance_scale=args.guidance_scale,
+                    generator=generator,
+                ).images
 
         for text_idx, global_idx in enumerate(rank_batches_index[cnt]):
             img_tensor = torch.tensor(np.array(images[text_idx]))
@@ -643,6 +644,7 @@ if __name__ == "__main__":
     parser.add_argument("--guidance_scale", type=float, default=5, help="Guidance scale as defined in [Classifier-Free Diffusion Guidance]")
     parser.add_argument("--split", action="store_true")
     parser.add_argument("--generate_teacher", action="store_true")
+    parser.add_argument("--vahe_code", action="store_true")
 
     args = parser.parse_args()
     args.num_images_per_prompt = 1
@@ -663,6 +665,7 @@ if __name__ == "__main__":
     if not args.generate_teacher:
         ckpt_path = get_checkpoint_path(args.quantized_model_path)
         unet = load_quantized_unet(ckpt_path, weight_bit=args.weight_bit, act_bit=args.act_bit, device=device, split=args.split)
+        setattr(unet.add_embedding.linear_1, 'in_features', 2816)
         torch.cuda.empty_cache()
 
     # load model
@@ -675,8 +678,8 @@ if __name__ == "__main__":
     if not args.generate_teacher:
         sdxl_pipeline.unet = unet
 
-    if dist.get_rank() == 0:
-        wandb.init(entity='rock-and-roll', project='baselines', name=args.exp_name)
+    # if dist.get_rank() == 0:
+    #     wandb.init(entity='rock-and-roll', project='baselines', name=args.exp_name)
 
     print("Generating with a quantized model.")
     images, prompts = distributed_sampling(sdxl_pipeline, device, args)
@@ -688,5 +691,5 @@ if __name__ == "__main__":
 
     if dist.get_rank() == 0:
         pick_score, clip_score, fid_score = calculate_scores(args, images, prompts, device=device)
-        wandb.log({"pick_score": pick_score, "clip_score": clip_score, "fid_score": fid_score})
+        # wandb.log({"pick_score": pick_score, "clip_score": clip_score, "fid_score": fid_score})
         print(f"{pick_score}", f"{clip_score}", f"{fid_score}")

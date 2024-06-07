@@ -90,8 +90,6 @@ def generate_with_quantized_sdxl(pipe, prompt, num_images_per_prompt=1, output_t
                                  device='cuda', seed=None, guidance_scale=5, num_inference_steps=50, disable_tqdm=False):
     if seed is not None:
         generator = torch.Generator(device=device).manual_seed(seed)
-    else:
-        generator = None
     device = generator.device
 
     # 0. Default height and width to unet

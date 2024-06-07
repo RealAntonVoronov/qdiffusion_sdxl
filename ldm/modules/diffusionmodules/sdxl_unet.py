@@ -88,7 +88,7 @@ class QDiffusionUNet(UNet2DConditionModel):
         self.up_blocks[1] = CustomCrossAttnUpBlock2D(self.up_blocks[1], split=self.split)
         self.up_blocks[2] = CustomUpBlock2D(self.up_blocks[2], split=self.split)
 
-    def forward(self, x, timesteps=None, context=None, added_cond_kwargs=None, debug=False):
+    def forward(self, x, timesteps=None, context=None, added_cond_kwargs=None, debug=False, **kwargs):
         """
         Apply the model to an input batch.
         :param x: an [N x C x ...] Tensor of inputs.
