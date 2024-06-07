@@ -69,11 +69,26 @@ def distributed_sampling(pipeline, device, args):
 
     local_images = []
     local_text_idxs = []
+    generator = torch.Generator(device=device).manual_seed(args.seed)
     for cnt, mini_batch in enumerate(tqdm(rank_batches, unit="batch", disable=(dist.get_rank() != 0))):
-        images = generate_with_quantized_sdxl(pipeline, prompt=list(mini_batch), output_type='pil', device=device, 
-                                              disable_tqdm=True, seed=args.seed, num_images_per_prompt=args.num_images_per_prompt,
-                                              guidance_scale=args.guidance_scale, num_inference_steps=args.num_inference_steps,
-                                              )
+        if args.generate_teacher:
+            images = pipeline(prompt=list(mini_batch), output_type='pil', device=device, 
+                              generator=generator, num_images_per_prompt=args.num_images_per_prompt,
+                              guidance_scale=args.guidance_scale, num_inference_steps=args.num_inference_steps,
+                              ).images
+        else:
+            images = generate_with_quantized_sdxl(pipeline, prompt=list(mini_batch), output_type='pil', device=device, 
+                                                  disable_tqdm=True, generator=generator, num_images_per_prompt=args.num_images_per_prompt,
+                                                  guidance_scale=args.guidance_scale, num_inference_steps=args.num_inference_steps,
+                                                  )
+        # print("generating with Vahe's code")
+        # images = do_inference(pipeline,
+        #         prompt=list(mini_batch),
+        #         num_inference_steps=args.num_inference_steps,
+        #         num_images_per_prompt=args.num_images_per_prompt,
+        #         guidance_scale=args.guidance_scale,
+        #         generator=generator,
+        #     ).images
 
         for text_idx, global_idx in enumerate(rank_batches_index[cnt]):
             img_tensor = torch.tensor(np.array(images[text_idx]))
@@ -189,6 +204,7 @@ if __name__ == "__main__":
     parser.add_argument("--num_inference_steps", type=int, default=50, help="number of inference steps used for calibration and evaluation")
     parser.add_argument("--guidance_scale", type=float, default=5, help="Guidance scale as defined in [Classifier-Free Diffusion Guidance]")
     parser.add_argument("--split", action="store_true")
+    parser.add_argument("--generate_teacher", action="store_true")
 
     args = parser.parse_args()
     args.num_images_per_prompt = 1
@@ -206,9 +222,10 @@ if __name__ == "__main__":
         os.makedirs(args.out_path, exist_ok=True)
 
     # load quantized unet
-    ckpt_path = get_checkpoint_path(args.quantized_model_path)
-    unet = load_quantized_unet(ckpt_path, weight_bit=args.weight_bit, act_bit=args.act_bit, device=device, split=args.split)
-    torch.cuda.empty_cache()
+    if not args.generate_teacher:
+        ckpt_path = get_checkpoint_path(args.quantized_model_path)
+        unet = load_quantized_unet(ckpt_path, weight_bit=args.weight_bit, act_bit=args.act_bit, device=device, split=args.split)
+        torch.cuda.empty_cache()
 
     # load model
     sdxl_pipeline = StableDiffusionXLPipeline.from_pretrained(args.sdxl_path, use_safetensors=True,
@@ -217,7 +234,8 @@ if __name__ == "__main__":
                                                               ).to(device)
     
     # change pipelines' unet to a quantized one
-    sdxl_pipeline.unet = unet
+    if not args.generate_teacher:
+        sdxl_pipeline.unet = unet
 
     if dist.get_rank() == 0:
         wandb.init(entity='rock-and-roll', project='baselines', name=args.exp_name)
