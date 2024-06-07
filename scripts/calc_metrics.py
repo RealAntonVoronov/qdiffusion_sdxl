@@ -678,8 +678,8 @@ if __name__ == "__main__":
     if not args.generate_teacher:
         sdxl_pipeline.unet = unet
 
-    # if dist.get_rank() == 0:
-    #     wandb.init(entity='rock-and-roll', project='baselines', name=args.exp_name)
+    if dist.get_rank() == 0:
+        wandb.init(entity='rock-and-roll', project='baselines', name=args.exp_name)
 
     print("Generating with a quantized model.")
     images, prompts = distributed_sampling(sdxl_pipeline, device, args)
@@ -691,5 +691,5 @@ if __name__ == "__main__":
 
     if dist.get_rank() == 0:
         pick_score, clip_score, fid_score = calculate_scores(args, images, prompts, device=device)
-        # wandb.log({"pick_score": pick_score, "clip_score": clip_score, "fid_score": fid_score})
+        wandb.log({"pick_score": pick_score, "clip_score": clip_score, "fid_score": fid_score})
         print(f"{pick_score}", f"{clip_score}", f"{fid_score}")
